@@ -223,9 +223,16 @@ enable_smbus() {
     # The baseline must exist before the bus is ever reachable, not after.
     capture_spd_baseline || die "refusing to enable SMBus without an SPD baseline"
 
-    if [[ -f "$GRUB_DROPIN" ]] && smbus_enabled; then
+    # Compare content, not mere existence. Checking only `-f` plus "is the
+    # parameter live" meant any later edit to the repo's drop-in silently never
+    # reached /etc -- the installer reported success and changed nothing, and
+    # --status then reported drift that a re-run could not clear.
+    if cmp -s "$REPO_DIR/default-grub.d/60-steam-machine-smbus.cfg" "$GRUB_DROPIN" && smbus_enabled; then
         log "SMBus boot parameter already installed and active"
         return 0
+    fi
+    if [[ -f "$GRUB_DROPIN" ]] && smbus_enabled; then
+        log "SMBus drop-in differs from the repo -- reinstalling"
     fi
 
     log "installing grub drop-in -> $GRUB_DROPIN"

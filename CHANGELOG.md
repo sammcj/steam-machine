@@ -27,4 +27,5 @@
 - Corrected stale status in `README.md`: `acpi_enforce_resources=lax`, DIMM temps, GPU overdrive and OpenRGB RAM detection have all landed and were verified live, but were still marked as needing a reboot.
 - Corrected `system/firewall/README.md`, which implied the installer validates rules against firewalld's parser at runtime. It does not - that check was done while writing it.
 - Fixed `.git/hooks/pre-commit` hardcoding `/Users/samm/.venv/bin/python3`. The interpreter is now resolved at runtime and checked for the `pre_commit` module, so the hook works on both the macOS laptop and this machine. Note `pre-commit install` regenerates the hardcoded form.
+- Fixed `hardware/sensors/install.sh` skipping the grub drop-in whenever the file merely existed and the parameter was live. Any later edit to the repo's copy silently never reached `/etc` - the installer reported success, changed nothing, and `--status` then showed drift that re-running could not clear. Now compares content.
 - Added CHANGELOG.md and a CLAUDE.md rule so future changes to the build notes and install scripts get logged.
