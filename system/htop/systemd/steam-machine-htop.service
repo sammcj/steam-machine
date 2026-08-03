@@ -1,0 +1,23 @@
+[Unit]
+Description=Restore Steam Machine htop config after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/system/htop/README.md
+# Neither /etc/htoprc nor the atomic-update.conf.d entry that preserves it is
+# on SteamOS's default keep list, so both can be gone after an A/B update,
+# leaving any account without its own htoprc on htop's built-in defaults.
+#
+# Wants=local-fs.target so /home (nvme0n1p8) is mounted before the deck-user
+# path is checked, and so the repo this unit reads from is actually readable.
+After=local-fs.target
+Wants=local-fs.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/system/htop/install.sh --boot
+# Nothing here can affect boot: htop is a diagnostic tool, not a dependency of
+# anything. A failure must be visible in `systemctl status` but must never
+# block startup.
+SuccessExitStatus=0

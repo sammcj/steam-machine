@@ -1,0 +1,33 @@
+# SATA link power management. Installed to
+# /etc/udev/rules.d/60-steam-machine-power.rules.
+#
+# Applies to every ahci host rather than to host0/host1 specifically, so a disk
+# moved to a different port keeps the setting. host2-host5 are empty; setting a
+# link policy on a port with nothing attached is a no-op.
+#
+# Why udev and not a one-shot write at boot: the attribute is per scsi_host, and
+# hosts are created when the ahci driver binds. A boot script would have to race
+# that; a udev rule is applied as each host appears, and re-applied on any
+# subsequent `change` event.
+#
+# `med_power_with_dipm` is the policy powertop asks for and the one TLP uses by
+# default on SSDs. It enables Host Initiated Power Management down to Slumber
+# plus Device Initiated Power Management, so the link drops to low power when
+# idle and either end can bring it back. libata negotiates DIPM against the
+# drive's advertised capability, so a drive that does not support it silently
+# gets the HIPM half rather than a broken link.
+#
+# The risk, and why --status checks for it: LPM interacts badly with a minority
+# of SATA SSDs, producing "failed command: READ FPDMA QUEUED" and a link reset
+# under load. On this machine the two drives are a btrfs RAID1 holding the game
+# library (see ../../hardware/storage/), so a reset would surface as filesystem
+# errors rather than something subtle. `install.sh --status` greps the journal
+# for ATA link resets and exception messages for exactly this reason.
+#
+# Reverting is a runtime write, no reboot:
+#   for h in /sys/class/scsi_host/host*/link_power_management_policy; do
+#       echo max_performance > "$h"
+#   done
+# and `./install.sh --uninstall` does it for you.
+ACTION=="add|change", SUBSYSTEM=="scsi_host", KERNEL=="host*", \
+    ATTR{link_power_management_policy}="med_power_with_dipm"

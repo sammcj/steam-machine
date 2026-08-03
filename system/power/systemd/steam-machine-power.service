@@ -1,0 +1,24 @@
+[Unit]
+Description=Restore and apply idle power tunables after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/system/power/README.md
+# Root half of this subsystem. Two jobs, and the second is the one that matters:
+#
+#   1. Put /etc/sysctl.d/60-steam-machine-power.conf back if an A/B update
+#      dropped it (nothing under /etc/sysctl.d is on the SteamOS keep list).
+#   2. Apply its values *on this boot*.
+#
+# (2) is not redundant with (1). systemd-sysctl.service runs at sysinit.target,
+# long before this unit can, so on the boot after an update that ate the file
+# the settings were never applied -- restoring the file alone would leave them
+# inactive until the next reboot. Unlike the modprobe-based subsystems, these
+# are runtime-writable, so the same boot can be fixed.
+After=local-fs.target systemd-sysctl.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/system/power/install.sh --boot
+# Config-only subsystem -- must never block boot.
+
+[Install]
+WantedBy=multi-user.target

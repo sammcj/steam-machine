@@ -88,7 +88,21 @@ lock — if it were killed at the wrong moment. `ExecStopPost` releases the lock
 the daemon itself dies.
 
 The daemon holds the lock while **any logind session has `Service=sshd`**, plus
-a grace window (`KEEPAWAKE_WINDOW`, default 7200 s) after the last one ends.
+a grace window (`KEEPAWAKE_WINDOW`, default 1800 s) after the last one ends.
+
+### Why the window is 1800 s and not longer
+
+It was 7200 s (2 h) until 2026-08-03. That was too long, and the cost was not
+obvious from inside this subsystem: the journal showed only **two suspends in
+three days**, because any day with remote work on it kept the machine awake
+essentially permanently — the tail from one session had not expired before the
+next one began. A machine that never suspends wastes more power than every
+tunable in [system/power/](../../system/power/README.md) saves.
+
+1800 s matches Steam's own `IdleSuspendACSeconds`, which is the timer that
+actually fires the suspend this inhibitor blocks. A tail longer than the timer
+it defers is just dead time. It still covers the case the window exists for: a
+dropped Wi-Fi link or a closed laptop lid reconnecting a few minutes later.
 
 ### The dependency on ClientAliveInterval
 
@@ -133,6 +147,38 @@ journalctl -u steam-machine-keepawake -f
 
 To change the grace window, edit `Environment=KEEPAWAKE_WINDOW=` in
 `systemd/steam-machine-keepawake.service` and re-run `./install.sh`.
+
+### `--status` reports two windows, and the difference matters
+
+```
+grace window (config):  1800 seconds after the last SSH session
+grace window (running): 7200 seconds
+[warn] the running daemon still has the OLD window (7200 s, config says 1800 s)
+```
+
+The installer used to finish with `systemctl enable --now`, and `--now`
+degrades to `start` — a **no-op on an already-active unit**. So editing the
+window and re-running the installer wrote the new unit file, reloaded systemd,
+reported success, and left the old value live in the running process. `--status`
+read the window from the unit file, so it confirmed a change that had not
+happened. Caught on 2026-08-03 on the 7200 → 1800 change.
+
+Fixed two ways, because either alone is a single point of failure:
+
+- `do_install` now `restart`s rather than `start`s. The lock drops for well under
+  a second — the new process re-acquires on its first loop iteration, before the
+  first poll sleep — and Steam's suspend needs 30 minutes of inactivity, so the
+  gap cannot lose a race.
+- `--status` reports the **running** window alongside the configured one and
+  warns on drift. It reads the value from the `started (window=Ns)` line the
+  daemon logs at startup, filtered to the current `MainPID`. That is the only
+  source that reflects the process rather than the file: `systemctl show -p
+  Environment` re-reads the unit after a `daemon-reload` and would tell the same
+  lie.
+
+The general trap is worth remembering for any unit in this repo that carries
+config in `Environment=`: `daemon-reload` makes systemd re-read the file, it does
+not make a running process re-read anything.
 
 ## Not done here
 

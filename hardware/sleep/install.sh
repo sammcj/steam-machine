@@ -94,8 +94,33 @@ do_install() {
     ensure_bashrc
 
     systemctl daemon-reload
-    log "enabling and starting $DAEMON_UNIT"
-    systemctl enable --now "$DAEMON_UNIT"
+    log "enabling and (re)starting $DAEMON_UNIT"
+    systemctl enable "$DAEMON_UNIT"
+    # restart, NOT `enable --now`. `--now` degrades to `start`, which is a no-op
+    # on an already-active unit -- so re-running the installer after editing
+    # KEEPAWAKE_WINDOW left the old value live in the running process while
+    # --status happily reported the new one from the unit file. Caught on
+    # 2026-08-03 when the 7200 -> 1800 change appeared to apply and had not.
+    #
+    # The restart drops the inhibitor for well under a second: the daemon's
+    # ExecStopPost stops the inhibit unit, and the new process re-acquires on
+    # its first loop iteration, which runs before the first poll sleep. Steam's
+    # suspend needs 30 minutes of inactivity, so the gap cannot lose a race.
+    systemctl restart "$DAEMON_UNIT"
+
+    # Let the daemon's first loop iteration finish before do_status looks at the
+    # lock. Without this the installer's own status block races the restart and
+    # prints "sleep currently held: no" with sessions plainly open -- which reads
+    # as a broken subsystem at exactly the moment someone is checking it worked.
+    #
+    # A full timeout is not an error: it is also what a correct run looks like
+    # when there are no SSH sessions, which is the common case on the TV.
+    local i
+    for i in 1 2 3 4 5; do
+        systemctl is-active --quiet "$INHIBIT_UNIT" && break
+        # `sleep` is unavailable in some non-interactive contexts on this box.
+        timeout 1 tail -f /dev/null || true
+    done
 
     log "done"
     echo
@@ -119,6 +144,21 @@ do_boot() {
     ensure_bashrc
 }
 
+# The grace window the RUNNING daemon actually has, or empty.
+#
+# The daemon prints `started (window=Ns poll=Ns)` as its first act, so the
+# journal holds the value the process was given. Filtering on _PID pins it to
+# the current instance -- without that, an old line from a previous PID would be
+# reported as current, which is precisely the failure this exists to catch.
+running_window() {
+    local pid
+    pid="$(systemctl show "$DAEMON_UNIT" -p MainPID --value 2>/dev/null || true)"
+    [[ -n "$pid" && "$pid" != "0" ]] || return 1
+    journalctl -u "$DAEMON_UNIT" _PID="$pid" --no-pager -o cat 2>/dev/null \
+        | sed -n 's/^keepawake: started (window=\([0-9]\{1,\}\)s.*/\1/p' \
+        | tail -1
+}
+
 do_status() {
     local src missing=0
 
@@ -136,12 +176,32 @@ do_status() {
         echo "no"
     fi
 
-    # Read from the repo unit rather than `systemctl show`, so this still
-    # reports something useful when the unit is not loaded at all.
-    local window
+    # Two windows, deliberately. Reporting only the configured one is how a
+    # 7200 -> 1800 edit was able to look applied while the daemon carried on
+    # with 7200 (see the restart comment in do_install). A status line that
+    # confirms a change which did not happen is worse than no status line.
+    #
+    # Configured: read from the repo unit rather than `systemctl show`, so this
+    # still reports something useful when the unit is not loaded at all.
+    # Running: taken from the line the daemon itself logs at startup, filtered
+    # to the current MainPID. That is the only source that reflects the process
+    # rather than the file -- `systemctl show -p Environment` re-reads the unit
+    # after a daemon-reload and would tell the same lie.
+    local window running
     window="$(sed -n 's/^Environment=KEEPAWAKE_WINDOW=\(.*\)/\1/p' \
         "$REPO_DIR/systemd/$DAEMON_UNIT" | head -1)"
-    printf 'grace window:           %s\n' "${window:-unknown} seconds after the last SSH session"
+    running="$(running_window || true)"
+
+    printf 'grace window (config):  %s\n' "${window:-unknown} seconds after the last SSH session"
+    if [[ -n "$running" ]]; then
+        printf 'grace window (running): %s seconds\n' "$running"
+    else
+        printf 'grace window (running): unknown (daemon stopped, or no start line in the journal)\n'
+    fi
+    if [[ -n "$window" && -n "$running" && "$window" != "$running" ]]; then
+        warn "the running daemon still has the OLD window ($running s, config says $window s)"
+        warn "  fix: systemctl restart $DAEMON_UNIT"
+    fi
 
     # /etc/polkit-1/rules.d is 0750 root:polkitd, so an unprivileged `[[ -f ]]`
     # on anything inside it returns false whether or not the file exists.

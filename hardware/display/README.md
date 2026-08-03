@@ -248,7 +248,7 @@ The GPU emits plain DisplayPort, which has no HDMI Forum entanglement, and the
 converter chip does the FRL conversion. Hardware: **UGREEN 80397**, active,
 unidirectional, DP 1.4 HBR3, DSC 1.2a, HDCP 2.3, 32.4 Gbps.
 
-DSC is load-bearing here, not marketing:
+DSC is required here, not marketing:
 
 | Path | Needed | HBR3 available | |
 | --- | ---: | ---: | :-- |

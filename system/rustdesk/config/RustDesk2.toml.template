@@ -34,7 +34,7 @@ allow-hide-cm = "Y"
 # EVERY inbound connection including direct-IP ones, before authentication.
 # Comma-separated; bare IPs and CIDR both parse (IpCidr::from_str).
 #
-# This is the load-bearing control for "LAN only". RustDesk offers no way to
+# This is the control that actually enforces "LAN only". RustDesk offers no way to
 # disable its rendezvous registration while keeping direct IP working --
 # stop-service = "Y" would do it but takes the direct listener down too -- so
 # the machine still announces itself to rs-ny.rustdesk.com and holds an ID.

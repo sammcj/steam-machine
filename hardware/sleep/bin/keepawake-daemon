@@ -24,7 +24,7 @@ set -euo pipefail
 
 # Seconds to keep holding after the last SSH session disappears. Set from the
 # unit file; see the comment there for why the default is what it is.
-WINDOW="${KEEPAWAKE_WINDOW:-7200}"
+WINDOW="${KEEPAWAKE_WINDOW:-1800}"
 POLL="${KEEPAWAKE_POLL:-60}"
 
 INHIBIT_UNIT="steam-machine-sleep-inhibit.service"
