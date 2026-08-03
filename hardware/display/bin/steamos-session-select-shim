@@ -1,0 +1,71 @@
+#!/bin/bash
+# Installed to /usr/local/bin/steamos-session-select by ../install.sh.
+#
+# WHY THIS EXISTS
+#
+# Steam's Power -> "Switch to Desktop" button shells out to
+# `steamos-session-select plasma`, and that case in Valve's script is hardcoded:
+#
+#     plasma)   steamosctl switch-to-desktop-mode plasmax11.desktop
+#
+# so it lands on an X11 Plasma session no matter what `default-desktop-session`
+# says (that setting is only consulted by a desktop-mode *boot*). On this
+# machine an X11 desktop means no colour management at all -- HDR, Wide Colour
+# Gamut, ICC profiles and brightness are KWin Wayland-only features and report
+# `incapable` on X11 -- so sRGB content goes unmanaged to a wide-gamut OLED and
+# every colour comes out lurid. See ../README.md.
+#
+# SteamOS 3.8 made Wayland the intended Desktop Mode default, so this is a
+# legacy-alias bug rather than a Valve preference:
+# https://github.com/ValveSoftware/SteamOS/issues/2081 (open as of Aug 2026).
+#
+# HOW IT WORKS
+#
+# /usr/local/bin precedes /usr/bin in the PATH that Steam, steamos-manager and
+# every login shell inherit (/etc/profile builds it; verified on this machine
+# for steam.sh, steamos-manager and the gamescope session, which reaches
+# /etc/profile via /usr/share/sddm/scripts/wayland-session). Dropping a file of
+# the same name here shadows Valve's without editing or replacing it, so their
+# copy keeps updating normally.
+#
+# Only the bare `plasma` alias is rewritten. Everything else -- `gamescope`,
+# `plasma-wayland`, and both `*-persistent` forms -- is passed through
+# untouched, so `plasma-x11-persistent` is still there if X11 is ever wanted
+# deliberately, as is `/usr/bin/steamos-session-select plasma` by full path.
+#
+# PERSISTENCE: /usr/local is on the rootfs subvolume, which a SteamOS A/B update
+# replaces wholesale -- so this file is deleted by every OS update, silently.
+# steam-machine-display.service reinstalls it at boot. Do not rely on this file
+# alone being present.
+set -u
+
+REAL=/usr/bin/steamos-session-select
+
+# If Valve's script is ever gone or non-executable there is nothing sensible to
+# delegate to, and failing loudly beats silently doing nothing when someone has
+# just asked to change session.
+if [[ ! -x "$REAL" ]]; then
+    echo >&2 "!! $REAL is missing or not executable -- cannot switch session"
+    exit 1
+fi
+
+args=("$@")
+
+# `plasma` is the only rewrite. Steam passes exactly this, with no other
+# arguments.
+if [[ "${1:-}" == "plasma" ]]; then
+    args=(plasma-wayland "${@:2}")
+    # Logged so `journalctl -t steam-machine-session` can confirm the shim is
+    # actually on the path Steam takes, rather than it being assumed.
+    command -v logger >/dev/null 2>&1 &&
+        logger -t steam-machine-session \
+            "rewrote 'plasma' (X11) -> 'plasma-wayland' for colour management"
+fi
+
+# Set by ../install.sh to check the mapping without tearing down the session.
+if [[ -n "${STEAM_MACHINE_SESSION_DRYRUN:-}" ]]; then
+    echo "dry run: would exec $REAL ${args[*]}"
+    exit 0
+fi
+
+exec "$REAL" "${args[@]}"

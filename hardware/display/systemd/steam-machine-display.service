@@ -1,0 +1,30 @@
+[Unit]
+Description=Restore display config (session-select shim) after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/hardware/display/README.md
+# This unit exists for one reason: /usr/local/bin/steamos-session-select is on
+# the rootfs subvolume, and a SteamOS A/B update replaces that subvolume
+# wholesale. The shim is therefore deleted by every OS update -- with no error
+# and no symptom until the next time Steam's "Switch to Desktop" button is
+# pressed and the desktop comes up in X11 with wrecked colour again.
+#
+# This unit file itself is safe: /etc/systemd/system/*.service is on the default
+# keep list (/usr/lib/rauc/atomic-update-keep.conf), so it survives to do the
+# repair. The modprobe.d config is covered separately by an
+# atomic-update.conf.d drop-in.
+#
+# Reinstalling the shim needs the rootfs writable; install.sh --boot unlocks it
+# only when it actually has work to do, and puts it back the way it found it.
+After=local-fs.target
+# The repo lives on /home, a separate partition.
+RequiresMountsFor=/home/deck
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/display/install.sh --boot
+# Nothing else waits on this, and a stuck btrfs property call should not hold
+# up boot indefinitely.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

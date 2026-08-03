@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Switch the desktop session to Plasma Wayland, confirming with a GUI dialog.
+#
+# This is the graphical twin of the `wayland` shell function in
+# ../bashrc.d/wayland.sh -- same action, but usable from a desktop shortcut or
+# the application launcher, where there is no terminal to prompt in.
+#
+# Why it exists at all: Steam's Power -> Switch to Desktop always lands on X11.
+# `steamwebhelper` shells out to `steamos-session-select %s` with the legacy
+# `plasma` alias, which /usr/bin/steamos-session-select hardcodes to
+# `plasmax11.desktop`, bypassing the configured default-desktop-session. On X11
+# there is no HDR, no Wide Colour Gamut and no colour management, so wide-gamut
+# content goes unmanaged to the OLED and looks badly over-saturated. See
+# ../README.md and ValveSoftware/SteamOS issue #2081.
+#
+#   wayland-switch          confirm via kdialog, then switch
+#   wayland-switch --yes    skip the confirmation
+set -uo pipefail
+
+TARGET_SESSION="plasma-wayland"
+TITLE="Switch to Wayland"
+
+# kdialog is the KDE-native choice and is present on SteamOS; zenity is a
+# fallback in case this is ever run outside Plasma. Both are optional -- with
+# neither, fall back to switching without a prompt only if --yes was passed.
+have() { command -v "$1" >/dev/null 2>&1; }
+
+notify() {
+    if have kdialog; then kdialog --title "$TITLE" --msgbox "$1"
+    elif have zenity; then zenity --info --title="$TITLE" --text="$1"
+    else printf '%s\n' "$1"
+    fi
+}
+
+confirm() {
+    if have kdialog; then kdialog --title "$TITLE" --warningyesno "$1"
+    elif have zenity; then zenity --question --title="$TITLE" --text="$1"
+    else return 1   # no way to ask -- caller treats this as "do not proceed"
+    fi
+}
+
+if [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]]; then
+    ASSUME_YES=1
+else
+    ASSUME_YES=0
+fi
+
+if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
+    notify "Already running a Wayland session.\n\nHDR and colour management are available."
+    exit 0
+fi
+
+if ! command -v steamos-session-select >/dev/null 2>&1; then
+    notify "steamos-session-select not found -- cannot switch sessions."
+    exit 1
+fi
+
+if [[ $ASSUME_YES -eq 0 ]]; then
+    confirm "Restart the desktop session into Plasma Wayland?\n\nAll open windows will be closed. Save your work first.\n\nThis does not change boot behaviour - the machine still boots into Game Mode." \
+        || exit 0
+fi
+
+# The switch tears down the session this script is running in, taking its
+# parent (plasmashell, or the launching shell) with it. setsid --fork detaches
+# so the command cannot be killed partway through.
+setsid --fork nohup steamos-session-select "$TARGET_SESSION" \
+    >/dev/null 2>&1 </dev/null

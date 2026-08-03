@@ -1,0 +1,14 @@
+[Desktop Entry]
+# Template. install.sh substitutes @BIN@ with the absolute path to
+# hardware/display/bin/wayland-switch and drops the result on the Desktop and in
+# ~/.local/share/applications. Do not edit the installed copies -- edit this.
+Name=Switch to Wayland
+GenericName=Plasma Wayland session
+Comment=Restart the desktop session into Plasma Wayland (enables HDR and colour management)
+Exec=@BIN@
+Icon=preferences-desktop-display
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Settings;DesktopSettings;
+Keywords=wayland;session;hdr;colour;color;display;

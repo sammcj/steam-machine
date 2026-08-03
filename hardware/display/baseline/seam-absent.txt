@@ -1,0 +1,23 @@
+# `install.sh --seam` with the 4K120 artefact GONE.
+# Captured 2026-08-03T21:38:02+10:00, 15 min after a FULL POWER-OFF (not a
+# reboot) which cleared it. Desktop Mode, Wayland. Same 4K120 mode throughout.
+session:       desktop, wayland
+mode:          htot 4399 x vtot 2249 -> 1187 MHz at 120 Hz, 594 at 60
+link:          Current:  4  0x1e  0  Verified:  4  0x1e  16  Reported:  4  0x1e  16  Preferred:  0  0x0  0
+dsc_en:        1
+dsc_bpp:       256 (16ths)
+slice_w:       960
+vrr:           Min: 0 Max: 0
+
+VRR:
+  sink vrr_range           Min: 0 Max: 0
+  engaged                  no (sink reports no VRR range)
+pipe topology:
+  pipe 0  1922x2160
+  pipe 1  1922x2160
+  underflow                0 (clean)
+
+link retrain/failure messages since boot: 0
+
+# DPCD 0x500-0x50F: 2b02 f043 4837 3231 3803 3000 0000 0000
+#   OUI 2B:02:F0, "CH7218", hw rev 0x03, fw rev 48.0  -- byte-identical
