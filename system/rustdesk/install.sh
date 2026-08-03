@@ -209,6 +209,24 @@ extract_pkg() {
         --exclude='.MTREE' --exclude='.PKGINFO' \
         || die "extraction failed"
     [[ -x "$SHARE/rustdesk" ]] || die "extraction produced no $SHARE/rustdesk"
+
+    # The package ships its .desktop files to /usr/share/rustdesk/files/ and
+    # relies on .INSTALL's post_install() to copy them into
+    # /usr/share/applications/. We exclude .INSTALL on purpose -- it also
+    # overwrites our unit with upstream's and runs systemctl enable/start -- but
+    # the desktop entries still have to be placed by hand, or RustDesk never
+    # appears in the Desktop Mode application menu at all.
+    #
+    # That is not cosmetic. With no menu entry the obvious move is to install the
+    # Flatpak instead, which lands at /app, fails rustdesk's own is_installed()
+    # check, keeps a separate config and ID, and fights this install for 21118.
+    local d
+    for d in rustdesk.desktop rustdesk-link.desktop; do
+        [[ -f "$SHARE/files/$d" ]] || continue
+        install -Dm644 "$SHARE/files/$d" "/usr/share/applications/$d"
+    done
+    command -v update-desktop-database >/dev/null 2>&1 \
+        && update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
 }
 
 # --- config -------------------------------------------------------------------
@@ -379,6 +397,24 @@ do_status() {
     echo -n "binary:                 "
     if installed_ok; then echo "$($SHARE/rustdesk --version 2>/dev/null || echo '?') at $SHARE"
     else echo "NOT installed"; fi
+
+    echo -n "desktop entry:          "
+    if [[ -f /usr/share/applications/rustdesk.desktop ]]; then
+        echo "installed (appears in the Desktop Mode menu)"
+    else
+        echo "MISSING -- RustDesk will not appear in the application menu"
+    fi
+
+    # A Flatpak alongside this install is worth shouting about. It is the natural
+    # thing to reach for when the menu entry is missing, and it silently competes:
+    # /app fails rustdesk's is_installed(), so --password and friends break, it
+    # keeps its own config and ID under ~/.var/app, and it wants port 21118 too.
+    echo -n "conflicting flatpak:    "
+    if flatpak list --app 2>/dev/null | grep -qi 'com\.rustdesk\.RustDesk'; then
+        echo "PRESENT -- remove it: flatpak uninstall com.rustdesk.RustDesk"
+    else
+        echo "none"
+    fi
 
     echo -n "cached package:         "
     verify_pkg && echo "$PKG (checksum OK)" || echo "MISSING or CORRUPT"
