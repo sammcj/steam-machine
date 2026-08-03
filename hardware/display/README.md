@@ -487,6 +487,10 @@ connector names: Wayland/DRM uses `DP-1` / `HDMI-A-1`, X11 uses `DisplayPort-0` 
 sudo ./install.sh          # then reboot
 sudo ./install.sh --status
 sudo ./install.sh --seam   # capture display state while the 4K120 seam is visible
+
+# TV showing "no signal" while the machine is plainly running: force a re-detect
+sudo ./bin/display-redetect --force
+./bin/display-redetect --status      # no root needed, touches nothing
 ```
 
 Only the `modprobe.d` half needs the reboot (amdgpu parameters are read-only at
@@ -501,6 +505,12 @@ runtime). The session-select shim takes effect immediately.
 | `/etc/systemd/system/steam-machine-display.service` | yes | yes | `/etc/systemd/system/*.service` is keep-listed |
 | `/usr/local/bin/steamos-session-select` | yes | **no** | rootfs subvol is replaced — reinstalled by the boot unit |
 | `~/.bashrc` line, Desktop shortcuts | yes | yes | `/home` is a separate partition |
+| `/etc/systemd/system/steam-machine-display-{redetect,redetect-boot,redetect-resume,hotkey}.service` | yes | yes | `/etc/systemd/system/*.service` is keep-listed |
+| `/etc/udev/rules.d/99-steam-machine-display-redetect.rules` | yes (`/etc` overlay) | yes | `atomic-update.conf.d` keep entry + `--boot` |
+
+The re-detect scripts themselves live in the repo on `/home` and are run from
+there by the units, so they need no rootfs unlock and cannot be deleted by an
+A/B update — hence `RequiresMountsFor=/home/deck` on each unit.
 
 ## The problem
 
@@ -697,6 +707,97 @@ OTG: htot 4399 x vtot 2249 x 120 = 1188 MHz pixel clock
 soft and fringed, and 8-bit HDR bands visibly. On a 75" OLED that is a bad trade
 for the refresh rate. KDE still reports "HDR enabled, 10 bit" in this state —
 that is what it *requested*, not what is on the wire.
+
+## "No signal" when the TV is switched on after the machine (2026-08-04)
+
+**Symptom.** Wake the machine by WoL with the TV off, walk in later, switch the
+TV on: no signal. SSH in and everything reports healthy — `DP-1 connected`,
+`crtc-0 active=1`, 4 lanes at `0x1e` (HBR3), `dsc_clock_en 1`, `underflow 0`.
+The GPU has been happily transmitting 4K120 the whole time. The TV simply never
+gets a handshake it can latch onto.
+
+**Cause.** The DP sink is the converter, not the TV. The CH7218 keeps HPD
+asserted and answers EDID from its own cache whether the TV is on, off or in
+standby — at boot with the TV off, gamescope logged `Connector DP-1 -> GSM - LG
+TV` and read its colorimetry, then set 4K120 into a converter with nothing
+downstream. When the TV later wakes, the converter does not re-assert HPD, so
+nothing re-detects and nothing re-modesets. Confirmed: **zero hotplug uevents**
+across an entire boot containing three TV power cycles.
+
+This is not boot-specific. Any modeset or blank that lands while the TV is
+off strands it the same way — resume, a session switch, a screen blank.
+
+### There is no way to detect it from this side — measured, not assumed
+
+Every channel that could carry "the TV is awake" was sampled across a TV power
+cycle (35 samples over 128 s, TV switched off mid-window):
+
+| Channel | Result |
+| --- | --- |
+| DPCD `SINK_COUNT` (0x200) | `0x41` in both states — reports a sink unconditionally |
+| DPCD pages 0x0000/0100/0200/0300/2000/2100/2200/3000 (2048 B) | bit-identical |
+| DP 1.4a protocol-converter status page (0x3000) | all zeroes — device reports DPCD **1.2**, so these registers do not exist |
+| Branch info (0x500) | identity only — see the CH7218 section above |
+| EDID over DDC (`i2c-11`, addr 0x50) | answered from converter cache in both states |
+| DDC/CI (addr 0x37) | **absent in both states** — `ddcutil` reads the EDID but reports "Invalid display"; `getvcp D6` returns `DDCRC_RETRIES`/`EREMOTEIO` |
+| HDMI audio ELD | `monitor_present 1` in both states — derived from the connector, so cached too |
+
+The converter terminates the link and answers everything itself. A polling
+daemon has nothing to poll, so the fix cannot be detection — it has to be
+redoing the modeset while the TV is awake.
+
+### The fix: force a replug
+
+Writing `0` then `1` to the connector's debugfs `trigger_hotplug` makes the
+compositor drop the output and re-detect it. Both gamescope and kwin handle it.
+
+```bash
+sudo sh -c 'echo 0 > /sys/kernel/debug/dri/0/DP-1/trigger_hotplug
+            sleep 2
+            echo 1 > /sys/kernel/debug/dri/0/DP-1/trigger_hotplug'
+```
+
+A bare `echo 1` is **not** enough — measured. The connector never leaves the
+connected state, so userspace re-probes, sees no change and does nothing. The
+disconnect is the part that does the work.
+
+Under gamescope this is clean: a brief black frame, Steam stays up. Under
+Plasma it also restarts `plasmashell`, because kwin briefly sees zero outputs —
+harmless, but the desktop redraws.
+
+### Triggers
+
+`bin/display-redetect` wraps the above with a lock, a per-trigger debounce and
+connector auto-detection. Four things call it:
+
+| Trigger | Unit | When | Covers |
+| --- | --- | --- | --- |
+| **Shift+Esc** | `steam-machine-display-hotkey.service` | any time | everything — the escape hatch that works when the screen is already black |
+| Controller connect | udev rule → `steam-machine-display-redetect.service` | DualSense connects, USB or BT | walking in and turning the TV on |
+| Boot | `steam-machine-display-redetect-boot.service` | +25 s after `graphical.target` | TV already on at boot |
+| Resume | `steam-machine-display-redetect-resume.service` | +8 s after `suspend.target` | TV already on at resume |
+
+Each trigger keeps its **own** debounce stamp
+(`/run/steam-machine-display-redetect.<tag>.stamp`). Sharing one would let the
+speculative fire at boot — which achieves nothing if the TV is off — suppress
+the controller trigger a few seconds later, which is the one that matters.
+
+The hotkey daemon reads evdev directly rather than binding through xbindkeys
+(Game Mode) or kglobalaccel (Desktop), because it has to work in both plus a
+bare TTY, and has to survive a session switch. It runs as root and inspects
+**only** `KEY_ESC` and the two Shift keys; nothing is logged or buffered. It
+does not grab the devices, so Esc still reaches whatever has focus.
+
+### What still is not covered
+
+Pick up the controller *before* switching the TV on and the re-detect fires
+into a dark TV and achieves nothing. Shift+Esc is the fallback. The ordering
+that avoids the whole problem is **TV on first, then wake the machine** — then
+the session's own modeset lands with the TV awake and no trigger is needed.
+
+Ruled out as fixes: waking the TV over the network (it is deliberately off the
+LAN — LG's webOS phones home), and going back to the native HDMI port (real HPD
+from the TV, but 4K60 only until amdgpu gets FRL on Linux 7.2+).
 
 ## Warning: the TV is this machine's only console
 

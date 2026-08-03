@@ -45,6 +45,23 @@ UNIT_SRC="$REPO_DIR/systemd/steam-machine-display.service"
 UNIT_NAME="steam-machine-display.service"
 UNIT_DEST="/etc/systemd/system/$UNIT_NAME"
 
+# --- TV re-detect (the CH7218 converter hides the TV's power state) ----------
+# Units that must be enabled to fire on their own.
+REDETECT_UNITS_ENABLED=(
+    steam-machine-display-redetect-boot.service
+    steam-machine-display-redetect-resume.service
+    steam-machine-display-hotkey.service
+)
+# Installed but deliberately not enabled: udev starts it via SYSTEMD_WANTS, and
+# it has no [Install] section to enable.
+REDETECT_UNITS_TRIGGERED=(
+    steam-machine-display-redetect.service
+)
+UDEV_SRC="$REPO_DIR/udev/99-steam-machine-display-redetect.rules"
+UDEV_DEST="/etc/udev/rules.d/99-steam-machine-display-redetect.rules"
+REDETECT_BIN="$REPO_DIR/bin/display-redetect"
+HOTKEY_BIN="$REPO_DIR/bin/display-hotkey-daemon"
+
 SWITCH_BIN="$REPO_DIR/bin/wayland-switch"
 DESKTOP_SRC="$REPO_DIR/desktop/steam-machine-wayland.desktop.in"
 DESKTOP_NAME="steam-machine-wayland.desktop"
@@ -139,6 +156,54 @@ ensure_unit() {
     systemctl is-enabled --quiet "$UNIT_NAME" 2>/dev/null || systemctl enable "$UNIT_NAME"
 }
 
+# --- TV re-detect triggers ----------------------------------------------------
+# Nothing here needs a rootfs unlock: the scripts run from the repo on /home,
+# and everything installed lands in /etc. That is also why the units carry
+# RequiresMountsFor=/home/deck.
+#
+# Content-compared rather than existence-checked, for the same reason as the
+# shim: an A/B update deletes the udev rule outright, but a stale copy left by
+# an older revision of this repo is the case that would otherwise report as
+# installed and working while firing the wrong arguments.
+ensure_redetect() {
+    [[ -x "$REDETECT_BIN" ]] || die "missing or non-executable $REDETECT_BIN"
+    [[ -x "$HOTKEY_BIN"   ]] || die "missing or non-executable $HOTKEY_BIN"
+    bash -n "$REDETECT_BIN" || die "$REDETECT_BIN does not parse -- refusing to install"
+    python3 -m py_compile "$HOTKEY_BIN" \
+        || die "$HOTKEY_BIN does not compile -- refusing to install"
+
+    local u src reload=0
+    for u in "${REDETECT_UNITS_ENABLED[@]}" "${REDETECT_UNITS_TRIGGERED[@]}"; do
+        src="$REPO_DIR/systemd/$u"
+        [[ -f "$src" ]] || die "missing $src"
+        if [[ ! -f "/etc/systemd/system/$u" ]] || ! cmp -s "$src" "/etc/systemd/system/$u"; then
+            log "installing /etc/systemd/system/$u"
+            install -Dm644 "$src" "/etc/systemd/system/$u"
+            reload=1
+        fi
+    done
+    [[ $reload -eq 1 ]] && systemctl daemon-reload
+
+    for u in "${REDETECT_UNITS_ENABLED[@]}"; do
+        systemctl is-enabled --quiet "$u" 2>/dev/null || systemctl enable "$u"
+    done
+
+    if [[ ! -f "$UDEV_DEST" ]] || ! cmp -s "$UDEV_SRC" "$UDEV_DEST"; then
+        log "installing $UDEV_DEST"
+        install -Dm644 "$UDEV_SRC" "$UDEV_DEST"
+        udevadm control --reload-rules || warn "could not reload udev rules"
+    fi
+
+    # The hotkey is the trigger you reach for when the screen is already black,
+    # so a daemon that is installed-but-dead is the one failure worth catching
+    # here rather than at 9pm from the couch.
+    systemctl restart steam-machine-display-hotkey.service || \
+        warn "could not start the hotkey daemon"
+    sleep 1
+    systemctl is-active --quiet steam-machine-display-hotkey.service || \
+        warn "hotkey daemon is not running -- check: journalctl -u steam-machine-display-hotkey"
+}
+
 # The `wayland` shell function is sourced from the repo rather than copied into
 # .bashrc, so editing bashrc.d/wayland.sh takes effect in the next shell with no
 # reinstall. Guarded by a marker comment so this stays idempotent.
@@ -191,6 +256,7 @@ do_install() {
 
     ensure_shim
     ensure_unit
+    ensure_redetect
     ensure_bashrc
     ensure_desktop_entry
 
@@ -412,6 +478,28 @@ do_status() {
     fi
 
     echo
+    echo "TV re-detect triggers:"
+    local u state
+    for u in "${REDETECT_UNITS_ENABLED[@]}"; do
+        state="$(systemctl is-enabled "$u" 2>/dev/null || echo missing)"
+        # The hotkey daemon is the only long-running one, so it is the only one
+        # where "enabled" and "actually running" can disagree.
+        if [[ "$u" == steam-machine-display-hotkey.service ]]; then
+            state="$state, $(systemctl is-active "$u" 2>/dev/null || echo inactive)"
+        fi
+        printf '  %-46s %s\n' "${u%.service}" "$state"
+    done
+    printf '  %-46s %s\n' "udev rule (controller connect)" \
+        "$([[ -f "$UDEV_DEST" ]] && cmp -s "$UDEV_SRC" "$UDEV_DEST" && echo installed || echo "MISSING or stale")"
+    local t
+    for t in controller boot resume hotkey; do
+        if [[ -f "/run/steam-machine-display-redetect.$t.stamp" ]]; then
+            printf '  %-46s %s\n' "last fired ($t)" \
+                "$(( $(date +%s) - $(stat -c %Y "/run/steam-machine-display-redetect.$t.stamp") ))s ago"
+        fi
+    done
+
+    echo
     echo "live amdgpu parameters:"
     printf '  %-26s %s\n' "freesync_pcon_allow_all" "$(param freesync_pcon_allow_all)"
     printf '  %-26s %s\n' "deep_color"              "$(param deep_color)"
@@ -467,12 +555,24 @@ do_boot() {
     fi
     ensure_shim
     ensure_unit
+    ensure_redetect
 }
 
 do_uninstall() {
     need_root
     systemctl disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
     rm -f "$UNIT_DEST"
+    local u
+    for u in "${REDETECT_UNITS_ENABLED[@]}"; do
+        systemctl disable --now "$u" >/dev/null 2>&1 || true
+    done
+    for u in "${REDETECT_UNITS_ENABLED[@]}" "${REDETECT_UNITS_TRIGGERED[@]}"; do
+        rm -f "/etc/systemd/system/$u"
+    done
+    if [[ -f "$UDEV_DEST" ]]; then
+        rm -f "$UDEV_DEST"
+        udevadm control --reload-rules || true
+    fi
     systemctl daemon-reload
     if [[ -e "$SHIM_DEST" ]]; then
         trap relock_rootfs EXIT

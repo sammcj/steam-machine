@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Fire display-redetect on a global hotkey (default Shift+Esc).
+
+Why a daemon and not a compositor binding
+-----------------------------------------
+The whole point of this hotkey is that it works when the screen is black, which
+means it has to work in Game Mode, in Desktop Mode and at a TTY. gamescope
+binds keys through xbindkeys (gamescope-xbindkeys.service) and Plasma through
+kglobalaccel; binding both would be two configs covering two of the three
+cases. Reading evdev directly is one thing that covers all of them, and it
+keeps working across a session switch.
+
+Scope, deliberately narrow
+--------------------------
+This runs as root and reads keyboard event devices, so it is worth being
+precise about what it does: it looks at EV_KEY events only, and only ever
+inspects three key codes -- Esc and the two Shift keys. Nothing is logged,
+buffered or written anywhere. It does not grab the devices, so the chord still
+reaches whatever has focus (Esc in a game will still act as Esc).
+
+No third-party modules: python-evdev is not installed on SteamOS and pulling in
+a pacman package would not survive an A/B update. struct.unpack on the raw
+device is all this needs.
+"""
+
+import argparse
+import glob
+import os
+import select
+import struct
+import subprocess
+import sys
+import time
+
+# struct input_event on 64-bit Linux: struct timeval (two longs), then
+# __u16 type, __u16 code, __s32 value. 24 bytes.
+EVENT_FORMAT = "llHHi"
+EVENT_SIZE = struct.calcsize(EVENT_FORMAT)
+assert EVENT_SIZE == 24
+
+EV_KEY = 0x01
+KEY_ESC = 1
+KEY_LEFTSHIFT = 42
+KEY_RIGHTSHIFT = 54
+
+MODIFIERS = {KEY_LEFTSHIFT, KEY_RIGHTSHIFT}
+
+REDETECT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "display-redetect")
+
+# Rescan for hotplugged keyboards this often. A wireless keyboard that has gone
+# to sleep reappears as a new event node, so a daemon that only enumerated at
+# startup would quietly stop working after the first idle timeout.
+RESCAN_SECONDS = 5.0
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def is_keyboard(path):
+    """True if udev tagged this node as a keyboard.
+
+    Reading the udev database rather than issuing EVIOCGBIT ioctls: same
+    answer, no ctypes, and it matches what the rest of the repo greps for.
+    """
+    try:
+        out = subprocess.run(
+            ["udevadm", "info", "-q", "property", "-n", path],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "ID_INPUT_KEYBOARD=1" in out
+
+
+class Watcher:
+    def __init__(self):
+        self.fds = {}          # path -> file object
+        self.shift_held = set()  # key codes currently down, across all devices
+
+    def scan(self):
+        for path in sorted(glob.glob("/dev/input/event*")):
+            if path in self.fds:
+                continue
+            if not is_keyboard(path):
+                continue
+            try:
+                f = open(path, "rb", buffering=0)
+                os.set_blocking(f.fileno(), False)
+            except OSError as e:
+                log(f"cannot open {path}: {e}")
+                continue
+            self.fds[path] = f
+            log(f"watching {path}")
+
+    def drop(self, path):
+        f = self.fds.pop(path, None)
+        if f:
+            try:
+                f.close()
+            except OSError:
+                pass
+            log(f"dropped {path}")
+
+    def read_events(self, f):
+        """Yield (code, value) for EV_KEY events, or None if the device died."""
+        try:
+            data = f.read(EVENT_SIZE * 64)
+        except (OSError, ValueError):
+            return None
+        if not data:
+            return []
+        out = []
+        for i in range(0, len(data) - EVENT_SIZE + 1, EVENT_SIZE):
+            _, _, etype, code, value = struct.unpack(
+                EVENT_FORMAT, data[i:i + EVENT_SIZE]
+            )
+            if etype == EV_KEY:
+                out.append((code, value))
+        return out
+
+
+def fire(args):
+    cmd = [REDETECT, "--tag", "hotkey", "--force"]
+    if args.delay:
+        cmd += ["--delay", str(args.delay)]
+    log(f"hotkey pressed -> {' '.join(cmd)}")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        for line in (r.stdout + r.stderr).splitlines():
+            log(f"  {line}")
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"  failed: {e}")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--delay", type=int, default=0,
+                   help="seconds to wait before re-detecting (default 0)")
+    p.add_argument("--cooldown", type=float, default=5.0,
+                   help="minimum seconds between firings (default 5)")
+    args = p.parse_args()
+
+    if os.geteuid() != 0:
+        sys.exit("must run as root (reads /dev/input and writes debugfs)")
+    if not os.access(REDETECT, os.X_OK):
+        sys.exit(f"{REDETECT} is missing or not executable")
+
+    w = Watcher()
+    w.scan()
+    if not w.fds:
+        log("no keyboards found yet -- will keep looking")
+
+    last_fire = 0.0
+    last_scan = time.monotonic()
+
+    while True:
+        if not w.fds:
+            time.sleep(RESCAN_SECONDS)
+            w.scan()
+            continue
+
+        try:
+            ready, _, _ = select.select(list(w.fds.values()), [], [], RESCAN_SECONDS)
+        except (OSError, ValueError):
+            # A device vanished mid-select; re-derive the set and carry on.
+            for path in list(w.fds):
+                if not os.path.exists(path):
+                    w.drop(path)
+            continue
+
+        for f in ready:
+            path = next((p_ for p_, g in w.fds.items() if g is f), None)
+            if path is None:
+                continue
+            events = w.read_events(f)
+            if events is None:
+                w.drop(path)
+                continue
+            for code, value in events:
+                if code in MODIFIERS:
+                    # 1 = press, 2 = autorepeat, 0 = release
+                    if value:
+                        w.shift_held.add(code)
+                    else:
+                        w.shift_held.discard(code)
+                elif code == KEY_ESC and value == 1 and w.shift_held:
+                    now = time.monotonic()
+                    if now - last_fire < args.cooldown:
+                        log("hotkey ignored (cooldown)")
+                        continue
+                    last_fire = now
+                    fire(args)
+
+        now = time.monotonic()
+        if now - last_scan >= RESCAN_SECONDS:
+            last_scan = now
+            for path in list(w.fds):
+                if not os.path.exists(path):
+                    w.drop(path)
+            w.scan()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

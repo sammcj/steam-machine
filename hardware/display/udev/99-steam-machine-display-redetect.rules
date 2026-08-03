@@ -1,0 +1,24 @@
+# Re-detect the TV when a game controller connects.
+#
+# Installed to /etc/udev/rules.d/. See ../README.md for why this is needed: the
+# CH7218 DP->HDMI converter never tells the GPU that the TV has woken up, so a
+# machine that booted (or resumed, or switched session) with the TV off leaves
+# the TV showing "no signal" forever. Nothing on this side can detect it.
+#
+# A controller connecting is the closest available proxy for "Sam has walked in
+# and turned the TV on". It is not a perfect signal -- pick up the controller
+# before switching the TV on and the re-detect fires into a dark TV and
+# achieves nothing -- but Shift+Esc and the boot/resume triggers cover the rest.
+#
+# The DualSense reports the same HID_ID over USB (bus 0003) and Bluetooth (bus
+# 0005), so the bus field is globbed to match either. One connection creates
+# two hid devices a few milliseconds apart; display-redetect takes a
+# non-blocking lock and debounces, so the second one is a no-op.
+#
+# To add another pad, copy the line and change the vendor:product. The HID_ID
+# format is BUS:VVVVVVVV:PPPPPPPP, zero-padded to 8 hex digits, uppercase:
+#   udevadm info -q property -p /sys/bus/hid/devices/<device> | grep HID_ID
+
+# Sony DualSense (054C:0CE6)
+ACTION=="add", SUBSYSTEM=="hid", ENV{HID_ID}=="*:0000054C:00000CE6", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}+="steam-machine-display-redetect.service"

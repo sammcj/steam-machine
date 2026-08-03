@@ -1,0 +1,15 @@
+[Unit]
+Description=Re-detect the TV after resume from suspend
+Documentation=file:///home/deck/git/steam-machine/hardware/display/README.md
+# After= plus WantedBy= on suspend.target is the documented idiom for "run on
+# the way back out", not on the way in.
+After=suspend.target
+RequiresMountsFor=/home/deck
+
+[Service]
+Type=oneshot
+ExecStart=/home/deck/git/steam-machine/hardware/display/bin/display-redetect --tag resume --delay 8
+TimeoutStartSec=120
+
+[Install]
+WantedBy=suspend.target

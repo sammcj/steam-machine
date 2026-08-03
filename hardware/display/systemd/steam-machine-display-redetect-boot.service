@@ -1,0 +1,22 @@
+[Unit]
+Description=Re-detect the TV shortly after boot
+Documentation=file:///home/deck/git/steam-machine/hardware/display/README.md
+# Speculative: covers the case where the TV was already on at boot but the
+# session modeset still landed badly. If the TV is off when this fires it
+# achieves nothing, which is why it carries its own debounce tag -- sharing one
+# with the controller trigger would let this useless fire suppress the useful
+# one a few seconds later.
+After=graphical.target
+Wants=graphical.target
+RequiresMountsFor=/home/deck
+
+[Service]
+Type=oneshot
+# gamescope has done its initial modeset by ~10s on this machine; 25s leaves
+# room for a slow boot without making the flash land while you are still
+# looking at the Steam splash.
+ExecStart=/home/deck/git/steam-machine/hardware/display/bin/display-redetect --tag boot --delay 25
+TimeoutStartSec=120
+
+[Install]
+WantedBy=graphical.target

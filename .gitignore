@@ -12,3 +12,4 @@
 *.key
 gitleaks-report.json
 .claude/agent-memory
+__pycache__/

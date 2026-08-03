@@ -1,0 +1,18 @@
+[Unit]
+Description=Re-detect the TV after a controller connects
+Documentation=file:///home/deck/git/steam-machine/hardware/display/README.md
+# Started by /etc/udev/rules.d/99-steam-machine-display-redetect.rules via
+# SYSTEMD_WANTS when a game controller appears. Not enabled: it has no
+# [Install] section on purpose, so the only things that start it are udev and
+# an explicit "systemctl start".
+After=local-fs.target
+# The script lives in the repo, on /home.
+RequiresMountsFor=/home/deck
+
+[Service]
+Type=oneshot
+# A few seconds of slack: the controller connecting and the TV being switched
+# on are two separate human actions, and this way the slower one still lands
+# inside the window.
+ExecStart=/home/deck/git/steam-machine/hardware/display/bin/display-redetect --tag controller --delay 4
+TimeoutStartSec=60

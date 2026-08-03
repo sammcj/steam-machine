@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Force the display pipeline to re-detect the TV.
+#
+# Why this exists
+# ---------------
+# The LG C9 is driven through a UGREEN 80397 active DP -> HDMI converter, which
+# identifies itself as a Chrontel CH7218 (DPCD 0x500: OUI 0x2B02F0, branch ID
+# "CH7218", HW rev 3, FW rev 0x30). That converter -- not the TV -- is the DP
+# sink. It keeps HPD asserted and answers EDID from its own cache whether the
+# TV is on, off or in standby, so the GPU is never told when the TV wakes up.
+#
+# The consequence: any modeset that lands while the TV is off leaves the TV
+# stranded. Switch it on afterwards and you get "no signal" while everything on
+# this side reports a perfectly healthy 4K120 HBR3 link with DSC. It bites on a
+# Wake-on-LAN boot with the TV off, on resume, and on a session switch.
+#
+# There is no way to detect this from here. Measured on 2026-08-04, across a TV
+# power cycle: 2048 bytes of DPCD (pages 0x0000/0100/0200/0300/2000/2100/2200/
+# 3000) bit-identical, SINK_COUNT pinned at 0x41, the DP 1.4a protocol-converter
+# status page all zeroes (the device reports DPCD 1.2, so it does not implement
+# them), EDID answered from cache on DDC 0x50, DDC/CI absent at 0x37 in both
+# states, HDMI audio ELD unchanged. Nothing moves. See ../README.md.
+#
+# So the cure is not detection, it is redoing the modeset while the TV is awake.
+# Writing 0 then 1 to the connector's debugfs trigger_hotplug does exactly that:
+# the compositor sees a disconnect, drops the output, then re-detects and
+# re-sets the mode. Both gamescope and kwin handle it.
+#
+# A bare "1" is NOT enough -- measured. The connector never leaves the connected
+# state, so userspace re-probes, sees no change and does nothing. The disconnect
+# is the part that does the work.
+#
+#   display-redetect                    replug the connected connector
+#   display-redetect --delay 5          wait 5s first
+#   display-redetect --force            ignore the debounce
+#   display-redetect --status           report without touching anything
+#
+# Needs root: the trigger lives in debugfs.
+set -euo pipefail
+
+DELAY=0
+DEBOUNCE=60
+CONNECTOR=""
+TAG="default"
+FORCE=0
+STATUS=0
+
+log()  { printf '==> %s\n' "$*"; }
+warn() { printf '[warn] %s\n' "$*" >&2; }
+die()  { printf '[error] %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    sed -n '2,40p' "$0" | sed 's/^# \?//'
+    exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --delay)     DELAY="${2:?--delay needs a value}"; shift 2 ;;
+        --debounce)  DEBOUNCE="${2:?--debounce needs a value}"; shift 2 ;;
+        --connector) CONNECTOR="${2:?--connector needs a value}"; shift 2 ;;
+        # Each trigger gets its own debounce stamp. Sharing one would let the
+        # speculative fire at boot (TV probably still off) swallow the trigger
+        # that actually matters -- the controller connecting when you walk in.
+        --tag)       TAG="${2:?--tag needs a value}"; shift 2 ;;
+        --force)     FORCE=1; shift ;;
+        --status)    STATUS=1; shift ;;
+        -h|--help)   usage 0 ;;
+        *)           die "unknown option: $1 (try --help)" ;;
+    esac
+done
+
+STAMP="/run/steam-machine-display-redetect.$TAG.stamp"
+LOCK="/run/steam-machine-display-redetect.lock"
+
+# The connected connector, unless one was named. Writeback connectors report a
+# status of "unknown" and are not outputs, hence the exclusion.
+find_connector() {
+    local c n
+    for c in /sys/class/drm/card*-*; do
+        n="$(basename "$c")"
+        n="${n#card*-}"
+        [[ "$n" == Writeback-* ]] && continue
+        [[ -f "$c/status" ]] || continue
+        [[ "$(cat "$c/status")" == "connected" ]] || continue
+        printf '%s\n' "$n"
+        return 0
+    done
+    return 1
+}
+
+# debugfs exposes the DRM device under both a numeric index and its PCI address
+# (/sys/kernel/debug/dri/0 and .../0000:03:00.0 are the same device), and which
+# one you get is not stable across kernels. Glob for whichever carries the
+# connector rather than hardcoding either.
+find_trigger() {
+    local conn="$1" p
+    for p in /sys/kernel/debug/dri/*/"$conn"/trigger_hotplug; do
+        [[ -w "$p" ]] && { printf '%s\n' "$p"; return 0; }
+    done
+    return 1
+}
+
+stamp_age() {
+    [[ -f "$STAMP" ]] || { echo 999999; return; }
+    echo $(( $(date +%s) - $(stat -c %Y "$STAMP") ))
+}
+
+if [[ -z "$CONNECTOR" ]]; then
+    CONNECTOR="$(find_connector)" || die "no connected connector found -- nothing to re-detect"
+fi
+
+if [[ $STATUS -eq 1 ]]; then
+    echo "connector:     $CONNECTOR ($(cat "/sys/class/drm/card"*"-$CONNECTOR/status" 2>/dev/null))"
+    echo "trigger:       $(find_trigger "$CONNECTOR" 2>/dev/null || echo 'unavailable (needs root, or debugfs not mounted)')"
+    echo "tag:           $TAG"
+    echo "last run:      $([[ -f "$STAMP" ]] && echo "$(stamp_age)s ago" || echo never)"
+    echo "debounce:      ${DEBOUNCE}s"
+    exit 0
+fi
+
+[[ $EUID -eq 0 ]] || die "must run as root (debugfs) -- try: SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A $0"
+
+# Non-blocking: two hid devices appear within milliseconds of one controller
+# connecting, so the second invocation should quietly go away rather than queue
+# up behind the first and fire a second replug.
+exec 9>"$LOCK"
+flock -n 9 || { log "another run holds the lock -- skipping"; exit 0; }
+
+if [[ $FORCE -eq 0 ]]; then
+    age="$(stamp_age)"
+    if [[ "$age" -lt "$DEBOUNCE" ]]; then
+        log "last re-detect was ${age}s ago (debounce ${DEBOUNCE}s) -- skipping"
+        exit 0
+    fi
+fi
+
+[[ "$DELAY" -gt 0 ]] && sleep "$DELAY"
+
+# Re-check after the delay: the connector can go away while we wait.
+TRIGGER="$(find_trigger "$CONNECTOR")" \
+    || die "no trigger_hotplug for $CONNECTOR -- is debugfs mounted?"
+
+log "re-detecting $CONNECTOR (tag=$TAG)"
+# The disconnect and the settle are both load-bearing. Userspace needs to
+# actually process the unplug and tear the output down before the replug, or it
+# coalesces the pair into no change at all.
+echo 0 > "$TRIGGER"
+sleep 2
+echo 1 > "$TRIGGER"
+
+touch "$STAMP"
+log "done -- $CONNECTOR is $(cat "/sys/class/drm/card"*"-$CONNECTOR/status" 2>/dev/null)"
