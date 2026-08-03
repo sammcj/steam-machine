@@ -1,0 +1,14 @@
+*.zip
+*.tgz
+*.tar.gz
+*.log
+*.rar
+*.7z
+*.bak
+*.tmp
+*.swp
+*.DS_Store
+*.pem
+*.key
+gitleaks-report.json
+.claude/agent-memory

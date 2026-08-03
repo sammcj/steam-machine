@@ -1,0 +1,112 @@
+# dmidecode 3.6
+Getting SMBIOS data from sysfs.
+SMBIOS 3.8.0 present.
+# SMBIOS implementations newer than version 3.7.0 are not
+# fully supported by this version of dmidecode.
+
+Handle 0x000F, DMI type 17, 100 bytes
+Memory Device
+	Array Handle: 0x000C
+	Error Information Handle: 0x000E
+	Total Width: Unknown
+	Data Width: Unknown
+	Size: No Module Installed
+	Form Factor: Unknown
+	Set: None
+	Locator: DIMM 0
+	Bank Locator: P0 CHANNEL A
+	Type: Unknown
+	Type Detail: Unknown
+
+Handle 0x0011, DMI type 17, 100 bytes
+Memory Device
+	Array Handle: 0x000C
+	Error Information Handle: 0x0010
+	Total Width: 64 bits
+	Data Width: 64 bits
+	Size: 16 GB
+	Form Factor: DIMM
+	Set: None
+	Locator: DIMM 1
+	Bank Locator: P0 CHANNEL A
+	Type: DDR5
+	Type Detail: Synchronous Unbuffered (Unregistered)
+	Speed: 6000 MT/s
+	Manufacturer: Kingston
+	Serial Number: sha256:241477a00dcee845
+	Asset Tag: Not Specified
+	Part Number: KF560C36-16                   
+	Rank: 1
+	Configured Memory Speed: 6000 MT/s
+	Minimum Voltage: 1.1 V
+	Maximum Voltage: 1.1 V
+	Configured Voltage: 1.1 V
+	Memory Technology: DRAM
+	Memory Operating Mode Capability: Volatile memory
+	Firmware Version: Unknown
+	Module Manufacturer ID: Bank 2, Hex 0x98
+	Module Product ID: Unknown
+	Memory Subsystem Controller Manufacturer ID: Unknown
+	Memory Subsystem Controller Product ID: Unknown
+	Non-Volatile Size: None
+	Volatile Size: 16 GB
+	Cache Size: None
+	Logical Size: None
+	PMIC0 Manufacturer ID: Bank 15, Hex 0x6D
+	PMIC0 Device Type: Not Installed
+	RCD Manufacturer ID: Unknown
+	RCD Revision Number: Unknown
+
+Handle 0x0014, DMI type 17, 100 bytes
+Memory Device
+	Array Handle: 0x000C
+	Error Information Handle: 0x0013
+	Total Width: Unknown
+	Data Width: Unknown
+	Size: No Module Installed
+	Form Factor: Unknown
+	Set: None
+	Locator: DIMM 0
+	Bank Locator: P0 CHANNEL B
+	Type: Unknown
+	Type Detail: Unknown
+
+Handle 0x0016, DMI type 17, 100 bytes
+Memory Device
+	Array Handle: 0x000C
+	Error Information Handle: 0x0015
+	Total Width: 64 bits
+	Data Width: 64 bits
+	Size: 16 GB
+	Form Factor: DIMM
+	Set: None
+	Locator: DIMM 1
+	Bank Locator: P0 CHANNEL B
+	Type: DDR5
+	Type Detail: Synchronous Unbuffered (Unregistered)
+	Speed: 6000 MT/s
+	Manufacturer: Kingston
+	Serial Number: sha256:70d6e3a071532b62
+	Asset Tag: Not Specified
+	Part Number: KF560C36-16                   
+	Rank: 1
+	Configured Memory Speed: 6000 MT/s
+	Minimum Voltage: 1.1 V
+	Maximum Voltage: 1.1 V
+	Configured Voltage: 1.1 V
+	Memory Technology: DRAM
+	Memory Operating Mode Capability: Volatile memory
+	Firmware Version: Unknown
+	Module Manufacturer ID: Bank 2, Hex 0x98
+	Module Product ID: Unknown
+	Memory Subsystem Controller Manufacturer ID: Unknown
+	Memory Subsystem Controller Product ID: Unknown
+	Non-Volatile Size: None
+	Volatile Size: 16 GB
+	Cache Size: None
+	Logical Size: None
+	PMIC0 Manufacturer ID: Bank 15, Hex 0x6D
+	PMIC0 Device Type: Not Installed
+	RCD Manufacturer ID: Unknown
+	RCD Revision Number: Unknown
+

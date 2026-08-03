@@ -1,0 +1,25 @@
+[Unit]
+Description=Hold a logind block inhibitor (prevents system sleep)
+Documentation=file:///home/deck/git/steam-machine/hardware/sleep/README.md
+# Started and stopped on demand by steam-machine-keepawake.service. It has no
+# [Install] section on purpose: it must never be enabled, only pulled up when
+# something actually wants the machine kept awake.
+#
+# Why this is a unit at all, rather than a background process the daemon forks:
+# `systemd-inhibit` holds the lock for exactly as long as the process it spawns
+# lives. Killing systemd-inhibit from a script releases the lock but orphans
+# that child; killing the child releases it cleanly but is racy to express in
+# bash. Letting systemd own the cgroup makes both problems disappear.
+
+[Service]
+Type=exec
+# --what=sleep is the part that matters: SteamOS suspends via logind (Steam
+# calls org.freedesktop.login1.Manager.Suspend), and a block inhibitor on
+# `sleep` makes logind refuse. `idle` is free insurance in case logind's
+# IdleAction is ever set to something other than the current default of ignore.
+ExecStart=/usr/bin/systemd-inhibit \
+    --what=sleep:idle \
+    --mode=block \
+    --who=steam-machine-keepawake \
+    --why="SSH session active" \
+    -- /usr/bin/sleep infinity

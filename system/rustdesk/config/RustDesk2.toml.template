@@ -1,0 +1,44 @@
+# Template for /root/.config/rustdesk/RustDesk2.toml
+#
+# install.sh substitutes @LAN_CIDRS@ with the subnets derived from the live
+# interface at install time. Those are deliberately NOT committed here: this
+# repo is public and the IPv6 prefix is a real routable address.
+#
+# Edit ONLY with the service stopped. rustdesk --service spawns --server as the
+# desktop user, and at startup wait_initial_config_sync() copies root's whole
+# config down over the user's; a 0.3s loop then pushes user-side changes back
+# up. Editing while it runs means racing that loop.
+#
+# Every key below lives in [options] -- RustDesk2.toml has no other table that
+# matters here. The permanent password does NOT live in this file; it goes in
+# RustDesk.toml, and cannot be written by hand (see README).
+
+[options]
+
+# Listen for direct connections by IP, with no rendezvous server involved.
+# Value must be exactly "Y": option2bool() special-cases direct-server to
+# `value == "Y"`, so "true"/"1"/"yes" all evaluate FALSE.
+direct-server = "Y"
+direct-access-port = "21118"
+
+# Unattended access: a fixed password, no click-to-approve prompt on the TV.
+verification-method = "use-permanent-password"
+approve-mode = "password"
+
+# Suppress the connection-manager window. Only honoured when approve-mode is
+# "password" AND verification-method is "use-permanent-password" -- which is
+# why those two are set above.
+allow-hide-cm = "Y"
+
+# Source-IP allowlist, enforced in check_whitelist() from on_open(), i.e. for
+# EVERY inbound connection including direct-IP ones, before authentication.
+# Comma-separated; bare IPs and CIDR both parse (IpCidr::from_str).
+#
+# This is the load-bearing control for "LAN only". RustDesk offers no way to
+# disable its rendezvous registration while keeping direct IP working --
+# stop-service = "Y" would do it but takes the direct listener down too -- so
+# the machine still announces itself to rs-ny.rustdesk.com and holds an ID.
+# What stops that ID being usable from outside is this list plus the firewall
+# rules install.sh applies. Do not empty it, and never add 0.0.0.0: that value
+# is an explicit "disable the whitelist" bypass.
+whitelist = "@LAN_CIDRS@"

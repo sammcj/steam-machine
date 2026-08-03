@@ -1,0 +1,26 @@
+[Unit]
+Description=Restore AMD overdrive (LACT) modprobe config after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/hardware/gpu/README.md
+# Root half of this subsystem, and all it does is put /etc back.
+#
+# Only an allowlisted subset of /etc carries into a new SteamOS image. This
+# unit is on the default list (/etc/systemd/system/*.service) and so is the
+# atomic-update.conf.d drop-in that keeps the modprobe config -- but if that
+# drop-in was ever missing when an update ran, the config is gone and LACT
+# silently loses every overclocking control. --boot reinstalls both.
+#
+# This runs far too late to affect the boot it runs on: amdgpu is loaded during
+# early userspace and its parameters are read-only afterwards. So the boot after
+# an update has no overdrive no matter what; this unit is what makes the *next*
+# one work without anyone noticing the loss and fixing it by hand.
+After=local-fs.target
+Before=lactd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/gpu/install.sh --boot
+# Config-only subsystem -- must never block boot.
+
+[Install]
+WantedBy=multi-user.target

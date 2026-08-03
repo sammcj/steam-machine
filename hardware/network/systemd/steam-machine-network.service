@@ -1,0 +1,22 @@
+[Unit]
+Description=Restore Wake-on-LAN configuration after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/hardware/network/README.md
+# /etc/systemd/network is not on SteamOS's atomic-update keep list, so the WoL
+# drop-in can be gone after an A/B update. The failure is completely silent --
+# the machine just stops waking -- so restoring it is worth a boot-time check.
+#
+# Ordered after NetworkManager so the nmcli half can be checked against a live
+# connection rather than racing it. Nothing depends on this unit.
+After=NetworkManager.service local-fs.target
+Wants=NetworkManager.service
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/network/install.sh --boot
+# Restoring the drop-in only fixes the NEXT boot -- udev applied the link
+# configuration long before this unit runs. install.sh --boot says so in the
+# journal rather than pretending it fixed the running system.

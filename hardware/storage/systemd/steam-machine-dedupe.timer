@@ -1,0 +1,15 @@
+[Unit]
+Description=Monthly dedupe of Proton prefixes and shader caches
+Documentation=file:///home/deck/git/steam-machine/hardware/storage/README.md
+
+[Timer]
+# Monthly, not weekly: the thing it deduplicates (compatdata) only grows when a
+# new game is installed, so more frequent runs would mostly re-hash unchanged
+# data. Persistent so it still runs if the machine was off at the scheduled
+# time -- this box is a console and spends most of its life powered down.
+OnCalendar=monthly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

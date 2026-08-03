@@ -1,0 +1,19 @@
+--- a/src/btmtk.c
++++ b/src/btmtk.c
+@@ -18,6 +18,16 @@
+ 
+ #include "btmtk.h"
+ 
++/* Local change (steam-machine): btmtk.o and btusb.o are linked together into
++ * the single btusb_mt7902 module, so every symbol below resolves internally.
++ * Leaving them exported clashes with the in-tree btmtk module, which stays
++ * loaded to serve the Realtek USB dongle via the in-tree btusb:
++ *   btusb_mt7902: exports duplicate symbol alloc_mtk_intr_urb (owned by btmtk)
++ * Un-export them so both modules can coexist.
++ */
++#undef EXPORT_SYMBOL_GPL
++#define EXPORT_SYMBOL_GPL(sym)
++
+ #define VERSION "0.1"
+ 
+ /* It is for mt79xx download rom patch*/

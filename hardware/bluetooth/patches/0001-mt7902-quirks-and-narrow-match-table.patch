@@ -1,0 +1,141 @@
+--- a/src/btusb.c
++++ b/src/btusb.c
+@@ -76,108 +76,13 @@
+ #define BTUSB_BARROT			BIT(28)
+ 
+ static const struct usb_device_id btusb_table[] = {
+-	/* Generic Bluetooth USB device */
+-	{ USB_DEVICE_INFO(0xe0, 0x01, 0x01) },
+-
+-	/* Generic Bluetooth AMP device */
+-	{ USB_DEVICE_INFO(0xe0, 0x01, 0x04), .driver_info = BTUSB_AMP },
+-
+-	/* Generic Bluetooth USB interface */
+-	{ USB_INTERFACE_INFO(0xe0, 0x01, 0x01) },
+-
+-	/* Apple-specific (Broadcom) devices */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x05ac, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_APPLE | BTUSB_IFNUM_2 },
+-
+-	/* MediaTek MT76x0E */
+-	{ USB_DEVICE(0x0e8d, 0x763f) },
+-
+-	/* Broadcom SoftSailing reporting vendor specific */
+-	{ USB_DEVICE(0x0a5c, 0x21e1) },
+-
+-	/* Apple MacBookPro 7,1 */
+-	{ USB_DEVICE(0x05ac, 0x8213) },
+-
+-	/* Apple iMac11,1 */
+-	{ USB_DEVICE(0x05ac, 0x8215) },
+-
+-	/* Apple MacBookPro6,2 */
+-	{ USB_DEVICE(0x05ac, 0x8218) },
+-
+-	/* Apple MacBookAir3,1, MacBookAir3,2 */
+-	{ USB_DEVICE(0x05ac, 0x821b) },
+-
+-	/* Apple MacBookAir4,1 */
+-	{ USB_DEVICE(0x05ac, 0x821f) },
+-
+-	/* Apple MacBookPro8,2 */
+-	{ USB_DEVICE(0x05ac, 0x821a) },
+-
+-	/* Apple MacMini5,1 */
+-	{ USB_DEVICE(0x05ac, 0x8281) },
+-
+-	/* AVM BlueFRITZ! USB v2.0 */
+-	{ USB_DEVICE(0x057c, 0x3800), .driver_info = BTUSB_SWAVE },
+-
+-	/* Bluetooth Ultraport Module from IBM */
+-	{ USB_DEVICE(0x04bf, 0x030a) },
+-
+-	/* ALPS Modules with non-standard id */
+-	{ USB_DEVICE(0x044e, 0x3001) },
+-	{ USB_DEVICE(0x044e, 0x3002) },
+-
+-	/* Ericsson with non-standard id */
+-	{ USB_DEVICE(0x0bdb, 0x1002) },
+-
+-	/* Canyon CN-BTU1 with HID interfaces */
+-	{ USB_DEVICE(0x0c10, 0x0000) },
+-
+-	/* Broadcom BCM20702B0 (Dynex/Insignia) */
+-	{ USB_DEVICE(0x19ff, 0x0239), .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Broadcom BCM43142A0 (Foxconn/Lenovo) */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x105b, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Broadcom BCM920703 (HTC Vive) */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x0bb4, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Foxconn - Hon Hai */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x0489, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Lite-On Technology - Broadcom based */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x04ca, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Broadcom devices with vendor specific id */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x0a5c, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* ASUSTek Computer - Broadcom based */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x0b05, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Belkin F8065bf - Broadcom based */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x050d, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* IMC Networks - Broadcom based */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x13d3, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Dell Computer - Broadcom based  */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x413c, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Toshiba Corp - Broadcom based */
+-	{ USB_VENDOR_AND_INTERFACE_INFO(0x0930, 0xff, 0x01, 0x01),
+-	  .driver_info = BTUSB_BCM_PATCHRAM },
+-
+-	/* Intel Bluetooth USB Bootloader (RAM module) */
+-	{ USB_DEVICE(0x8087, 0x0a5a),
+-	  .driver_info = BTUSB_INTEL_BOOT | BTUSB_BROKEN_ISOC },
++	/* Gigabyte B850M FORCE WIFI6E V2 onboard MediaTek MT7902.
++	 * Deliberately NOT the generic Bluetooth-class match: this
++	 * out-of-tree module has no Realtek/Intel/Broadcom support
++	 * compiled in, so it must never claim any other adapter.
++	 * Everything else stays with the in-tree btusb.
++	 */
++	{ USB_DEVICE(0x0e8d, 0x7902) },
+ 
+ 	{ }	/* Terminating entry */
+ };
+@@ -196,6 +101,8 @@
+ 						     BTUSB_WIDEBAND_SPEECH },
+ 	{ USB_DEVICE(0x0e8d, 0x1ede), .driver_info = BTUSB_MEDIATEK |
+ 						     BTUSB_WIDEBAND_SPEECH },
++	{ USB_DEVICE(0x0e8d, 0x7902), .driver_info = BTUSB_MEDIATEK |
++						     BTUSB_WIDEBAND_SPEECH },
+ 
+ 	{ }	/* Terminating entry */
+ };
+@@ -4099,7 +4006,12 @@
+ #endif
+ 
+ static struct usb_driver btusb_driver = {
+-	.name		= "btusb",
++	/* Local change (steam-machine): must NOT be "btusb" -- the in-tree
++	 * btusb stays loaded to serve the Realtek USB dongle, and usbcore
++	 * rejects a second driver registering the same name:
++	 *   Error: Driver 'btusb' is already registered, aborting...
++	 */
++	.name		= "btusb_mt7902",
+ 	.probe		= btusb_probe,
+ 	.disconnect	= btusb_disconnect,
+ 	.suspend	= pm_ptr(btusb_suspend),

@@ -1,0 +1,48 @@
+[Unit]
+Description=RustDesk (LAN-only unattended remote desktop)
+Documentation=file:///home/deck/git/steam-machine/system/rustdesk/README.md
+# Upstream's unit, with two additions: the ExecStartPre self-heal below, and
+# ordering after NetworkManager so the firewall rules have a live interface to
+# scope themselves to.
+Requires=network.target
+After=systemd-user-sessions.service NetworkManager.service
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=simple
+
+# SteamOS A/B updates replace the whole /usr tree, taking /usr/bin/rustdesk and
+# /usr/share/rustdesk with them. This unit survives -- /etc/systemd/system is on
+# the keep list -- so without this the unit would come back pointing at a binary
+# that no longer exists. Restores from the package cached under /home, which no
+# update touches. Also re-applies the firewalld rules, which are runtime-only.
+#
+# It must NOT be prefixed with `-`: if the binary could not be restored there is
+# nothing to run, and failing loudly here beats a confusing ExecStart error.
+ExecStartPre=/home/deck/git/steam-machine/system/rustdesk/install.sh --boot
+
+# --service is the root supervisor. It does not capture anything itself: it
+# watches seat0 via loginctl and spawns a --server child per desktop session as
+# that session's user, passing DISPLAY/WAYLAND_DISPLAY/XAUTHORITY/DBUS through.
+ExecStart=/usr/bin/rustdesk --service
+# Upstream's own comment: this kills --tray and --server both. The two narrower
+# pkill lines they tried first did not work.
+ExecStop=pkill -f "rustdesk --"
+PIDFile=/run/rustdesk.pid
+KillMode=mixed
+TimeoutStopSec=30
+User=root
+LimitNOFILE=100000
+Environment="PULSE_LATENCY_MSEC=60" "PIPEWIRE_LATENCY=1024/48000"
+
+# Not set, deliberately: RUSTDESK_FORCED_DISPLAY_SERVER.
+# get_display_server() asks `loginctl show-session <seat0 active> -p Type`
+# first, and on this machine that answers `wayland` in both Game Mode and
+# Desktop Mode -- so RustDesk already picks the PipeWire/portal capture path
+# and the override would only be a way to get it wrong. If capture ever comes
+# back black, `Environment="RUSTDESK_FORCED_DISPLAY_SERVER=wayland"` is the one
+# lever that exists (it is one of only two RUSTDESK_* vars in the whole tree).
+# Note is_x11() is a lazy_static, evaluated once per --server process, so any
+# change needs a service restart, not just a reconnect.

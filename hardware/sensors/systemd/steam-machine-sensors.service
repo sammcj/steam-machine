@@ -1,0 +1,25 @@
+[Unit]
+Description=Hardware sensor coverage (out-of-tree it87 + hwmon module set)
+Documentation=file:///home/deck/git/steam-machine/hardware/sensors/README.md
+# SteamOS A/B updates replace the whole /usr tree, taking it87.ko and the
+# depmod output with them. In-tree drivers (drivetemp, spd5118) come back on
+# their own via /etc/modules-load.d; only it87 needs restoring. Normal case is
+# a sub-second file copy from the cache under /home -- it only rebuilds, which
+# needs pacman and the network, when the kernel version has actually changed.
+#
+# /etc survives updates, so modprobe.d, sensors.d and the grub drop-in are not
+# reinstalled here. `--boot` verifies them and warns if they have gone missing.
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/sensors/install.sh --boot
+# A rebuild after a kernel change retries pacman internally (5 x 30s).
+TimeoutStartSec=600
+# Purely observability -- a failure here must never block boot. Let it fail
+# visibly in systemctl status instead.
+
+[Install]
+WantedBy=multi-user.target

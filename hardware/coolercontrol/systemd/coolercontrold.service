@@ -1,0 +1,33 @@
+[Unit]
+Description=CoolerControl daemon (hwmon monitoring + embedded web UI)
+Documentation=file:///home/deck/git/steam-machine/hardware/coolercontrol/README.md
+Documentation=https://docs.coolercontrol.org/
+# The it87 module is restored after SteamOS A/B updates by this unit; without
+# it the board's fans, Vcore and VRM temps are simply absent from the UI.
+After=steam-machine-sensors.service local-fs.target
+Wants=steam-machine-sensors.service
+
+[Service]
+Type=simple
+# Only an allowlisted subset of /etc carries into a new SteamOS image. This
+# unit is on the default list (/etc/systemd/system/*.service) but
+# /etc/coolercontrol is not, so --boot restores the keep entry and re-asserts
+# `apply_on_boot = false` before the daemon can act on a config that an update
+# may have reset to upstream defaults.
+#
+# No `-` prefix, deliberately: if monitoring-only cannot be guaranteed, the
+# daemon should not start. That costs temperature graphs, not boot.
+ExecStartPre=/home/deck/git/steam-machine/hardware/coolercontrol/install.sh --boot
+# The binary lives under /home; SteamOS replaces the whole /usr tree on every
+# A/B update. The daemon's own state is in /var, a separate partition.
+ExecStart=/home/deck/.local/lib/coolercontrol/coolercontrold
+Restart=on-failure
+RestartSec=5
+# Root is required: hwmon sysfs and the Super I/O are not readable otherwise.
+# The daemon is used read-only here (apply_on_boot = false), but it is not
+# sandboxed further -- it needs write access to /sys/class/hwmon for the fan
+# control it would do if ever asked to.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

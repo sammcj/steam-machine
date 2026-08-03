@@ -1,0 +1,35 @@
+[Unit]
+Description=Restore BTRFS RAID1 library config (fstab entry, udisks udev rule) after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/hardware/storage/README.md
+# All this unit does is put /etc back.
+#
+# Only an allowlisted subset of /etc carries into a new SteamOS image. This
+# unit is on the default list (/etc/systemd/system/*.service), but two things
+# this subsystem depends on are not:
+#
+#   /etc/fstab                                    -- the mount itself
+#   /etc/udev/rules.d/60-steam-machine-storage.rules -- hides the array from
+#                                                    udisks, so it cannot be
+#                                                    mounted a second time
+#
+# The udev rule is covered by an atomic-update.conf.d drop-in (also allowlisted),
+# but that is only good if the drop-in was present when the update ran. fstab
+# deliberately has no drop-in -- pinning it would shadow SteamOS's own future
+# versions of the file -- so re-adding the entry here is the only fix.
+#
+# Both are in /etc, an overlayfs with its upper layer in /var, so this needs no
+# rootfs unlock.
+After=local-fs.target
+Before=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/storage/install.sh --boot
+# A restored fstab entry does not mount anything this boot -- it applies at the
+# next one. That is the right trade: this machine's only display is a TV and
+# remounting underneath a running session is worse than a library that is
+# missing until reboot. Never block boot.
+
+[Install]
+WantedBy=multi-user.target

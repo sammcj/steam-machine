@@ -1,0 +1,33 @@
+#---------------------------------------------------------------------------#
+# Hide the RAID1 array from udisks, so it is only ever mounted by fstab.      #
+#                                                                            #
+# Without this, the array is offered in Dolphin (and anything else using      #
+# Solid/udisks) as a removable volume. Clicking it mounts the *top level*     #
+# subvolume -- subvolid=5 -- at /run/media/deck/<label>, alongside the fstab  #
+# mount of @SATA at /home/deck/SATA. The same files are then reachable by     #
+# two different paths, one of them with an extra @SATA/ component:            #
+#                                                                            #
+#     /home/deck/SATA/<game>                                                  #
+#     /run/media/deck/SATA/@SATA/<game>                                       #
+#                                                                            #
+# That happened on 2026-08-02 and produced three simultaneous mounts          #
+# (games, games1, games2) because udisks mounts *per device* and a two-device #
+# array offers it the same filesystem twice, appending a suffix on each name  #
+# collision. udisks then could not clean any of them up ("Device or resource  #
+# busy") because it attributes the mount to /dev/sdb while /proc/mounts names #
+# /dev/sda -- multi-device btrfs is outside udisks' model.                    #
+#                                                                            #
+# Two paths to one filesystem is a real hazard here, not just clutter: a game #
+# launcher or a copy started against one path while Steam writes the other    #
+# has no idea they are the same storage, and `install.sh --status` reports    #
+# whichever mount it finds first.                                            #
+#                                                                            #
+# Matched on filesystem UUID, not /dev/sdX -- device letters are assigned in  #
+# probe order and both mirror members must be covered.                        #
+#                                                                            #
+# Consequence, by design: the array no longer appears in the desktop's device #
+# list at all. fstab mounts it at boot, so there is nothing to click. To      #
+# mount it by hand (a degraded mirror, say) use mount(8) directly -- see      #
+# README.md, "If a disk fails".                                               #
+#---------------------------------------------------------------------------#
+SUBSYSTEM=="block", ENV{ID_FS_UUID}=="@FS_UUID@", ENV{UDISKS_IGNORE}="1"

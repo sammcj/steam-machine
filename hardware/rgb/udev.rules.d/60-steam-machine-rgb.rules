@@ -1,0 +1,56 @@
+#---------------------------------------------------------------------------#
+# Non-root access for OpenRGB, narrowed to the two controllers this machine   #
+# actually has.                                                               #
+#                                                                             #
+# Upstream ships a 158 KB 60-openrgb.rules covering every device OpenRGB has   #
+# ever supported. That file grants uaccess to *every* i2c bus on the system:   #
+#                                                                             #
+#     KERNEL=="i2c-[0-99]*", TAG+="uaccess"                                    #
+#                                                                             #
+# On this board that includes the FCH SMBus, where the DDR5 SPD EEPROMs live   #
+# at 0x50-0x57. i2c-piix4 has no equivalent of Intel's SPD write-disable bit   #
+# and calls i2c_register_spd_write_enable() unconditionally, so those EEPROMs  #
+# are always writable from the host -- and a bad write bricks the DIMMs. See   #
+# hardware/sensors/README.md. Handing that to every process in the seat        #
+# session, permanently, to light up a graphics card is a bad trade.            #
+#                                                                             #
+# So: explicit rules, two devices, nothing else.                               #
+#---------------------------------------------------------------------------#
+
+#---------------------------------------------------------------------------#
+# Gigabyte RGB Fusion 2 (ITE IT5711) -- B850M FORCE WIFI6E V2                 #
+#                                                                             #
+# This is the ARGB_V2_1/2/3 and LED_C headers, and therefore the GPU shroud    #
+# strip once its sync cable is plugged into one of them. USB 048d:5711.        #
+#                                                                             #
+# Note this PID is *not* in upstream's rules file (it lists 048d:8297 and      #
+# 048d:5702 for RGB Fusion 2 USB). Access currently happens to be granted by   #
+# a stale uaccess tag in the udev device database that no live rule reproduces #
+# -- `udevadm test` on the hidraw node matches nothing that sets it. That is   #
+# luck, not configuration, and it will not survive a udev database rebuild.    #
+#---------------------------------------------------------------------------#
+SUBSYSTEMS=="usb|hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="5711", TAG+="uaccess", TAG+="Gigabyte_RGB_Fusion_2_USB"
+
+# install.sh --no-i2c strips everything below this marker. Do not remove it.
+#@I2C-STANZA-BEGIN
+#---------------------------------------------------------------------------#
+# Kingston FURY DDR5 RGB -- SMBus PIIX4 adapter port 0, controllers at        #
+# 0x61/0x63.                                                                  #
+#                                                                             #
+# Bus number is not stable across boots, so match on the adapter name rather   #
+# than KERNEL=="i2c-2". This still exposes the SPD EEPROMs on the same bus:    #
+# it is the narrowest rule that can work, not a safe one. install.sh --no-i2c  #
+# omits it, which is the right choice once the RAM has been set to Static      #
+# black once -- that setting persists in the controller without a host.        #
+#---------------------------------------------------------------------------#
+#
+# The extra tag is not used by anything -- it exists so that this rule can be
+# proven to be the one doing the work:
+#
+#     udevadm test /sys/class/i2c-dev/i2c-2 | grep Steam_Machine_SMBus
+#
+# Without it, upstream's blanket `KERNEL=="i2c-[0-99]*"` rule would mask a
+# failure here and the narrowing would be imaginary. Same reason the Gigabyte
+# stanza above carries Gigabyte_RGB_Fusion_2_USB: upstream does not list 5711,
+# so seeing that tag on the hidraw node proves this file matched.
+SUBSYSTEM=="i2c-dev", ATTR{name}=="SMBus PIIX4 adapter*", TAG+="uaccess", TAG+="Steam_Machine_SMBus"

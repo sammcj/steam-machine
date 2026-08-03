@@ -1,0 +1,25 @@
+[Unit]
+Description=Restore RGB (OpenRGB) udev access rules after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/hardware/rgb/README.md
+# Root half of this subsystem, and all it does is put /etc back.
+#
+# Only an allowlisted subset of /etc carries into a new SteamOS image. This
+# unit is on the default list (/etc/systemd/system/*.service) and so is the
+# atomic-update.conf.d drop-in that keeps the udev rule -- but if that drop-in
+# was ever missing when an update ran, the rule is gone and every RGB
+# controller silently reverts to root-only. --boot reinstalls both.
+#
+# The LEDs themselves are set by the *user* unit steam-machine-rgb-off.service,
+# which cannot run here: OpenRGB is a per-user Flatpak reached through the
+# seat's uaccess ACL.
+After=local-fs.target
+Before=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/rgb/install.sh --boot
+# Purely cosmetic subsystem -- must never block boot.
+
+[Install]
+WantedBy=multi-user.target

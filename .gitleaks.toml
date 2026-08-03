@@ -1,0 +1,34 @@
+# Gitleaks configuration for this repo.
+#
+# This repo is public. The things most likely to leak from it are not API keys but hardware identifiers captured from live `--status` output and pasted into notes: NIC and Bluetooth MACs, DDR5 module serials, and the globally-routable IPv6 prefix. Stock gitleaks has no rule for any of those, which is why a Bluetooth BD_ADDR and two DIMM serials sat in tracked files undetected.
+
+[extend]
+  useDefault = true
+
+[[rules]]
+  id = "hardware-mac-address"
+  description = "MAC / Bluetooth BD_ADDR captured from live output"
+  regex = '''\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b'''
+  [rules.allowlist]
+    # All-zero is the MT7902 failure symptom this repo documents, not an identifier. Broadcast and the documentation-range OUI are equally not secrets.
+    regexes = [
+      '''00:00:00:00:00:00''',
+      '''[Ff][Ff]:[Ff][Ff]:[Ff][Ff]:[Ff][Ff]:[Ff][Ff]:[Ff][Ff]''',
+      '''00:00:5[Ee]:00:53:[0-9A-Fa-f]{2}''',
+    ]
+
+[[rules]]
+  id = "ddr5-module-serial"
+  description = "DDR5 SPD module serial from dmidecode -t 17"
+  regex = '''Serial Number:\s*(?:sha256:)?[0-9A-Fa-f]{6,}'''
+  [rules.allowlist]
+    # spd-check.sh stores serials as a truncated SHA-256 so the corruption canary still fires without publishing the value.
+    regexes = ['''Serial Number:\s*sha256:[0-9a-f]{16}''']
+
+[allowlist]
+  description = "Vendored upstream source"
+  paths = [
+    # Vendored kernel driver source: upstream authorship, changelogs and mailing-list addresses are part of the source and are not ours to scrub.
+    '''hardware/sensors/it87/upstream/.*''',
+    '''hardware/bluetooth/upstream/.*''',
+  ]

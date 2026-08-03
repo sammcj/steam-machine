@@ -1,0 +1,18 @@
+[Unit]
+Description=Deduplicate Proton prefixes and shader caches on the game library
+Documentation=file:///home/deck/git/steam-machine/hardware/storage/README.md
+# Pointless (and it exits cleanly) if the mirror is not up.
+RequiresMountsFor=/home/deck/SATA
+After=home-deck-SATA.mount network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/deck/git/steam-machine/hardware/storage/bin/dedupe.sh
+# Hashing a large library takes a while; it is idle-priority throughout, so a
+# long run costs nothing that matters.
+TimeoutStartSec=6h
+# Belt and braces on top of the ionice/nice in the script itself.
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+Nice=19

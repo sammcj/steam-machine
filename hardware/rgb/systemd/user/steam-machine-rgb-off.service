@@ -1,0 +1,31 @@
+[Unit]
+Description=Force all RGB lighting off (OpenRGB)
+Documentation=file:///home/deck/git/steam-machine/hardware/rgb/README.md
+# A *user* unit, unlike every other subsystem in this repo, because OpenRGB is
+# a per-user Flatpak: it needs the session bus and, more importantly, the
+# uaccess ACLs that only exist for the user owning the active seat. A system
+# unit running as root could not `flatpak run` it, and would not need to.
+#
+# Lives in ~/.config/systemd/user, so unlike /etc it is not subject to the
+# SteamOS A/B keep list at all -- /home is untouched by updates.
+#
+# The companion system unit, steam-machine-rgb.service, does the root-side job
+# (restoring the udev rule if a SteamOS update dropped it) and must have run
+# before the ACLs this depends on can exist.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# --boot polls for the controller rather than assuming it is ready: the seat
+# uaccess ACL is applied as the session activates, which races this unit.
+ExecStart=/home/deck/git/steam-machine/hardware/rgb/bin/rgb-off.sh --boot
+# Up to 60s of polling inside the script, plus Flatpak's cold start.
+TimeoutStartSec=180
+# Strictly cosmetic. It must never hold up the session -- let it fail visibly
+# in `systemctl --user status` instead.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=default.target

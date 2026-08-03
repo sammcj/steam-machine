@@ -1,0 +1,27 @@
+[Unit]
+Description=Onboard MediaTek MT7902 Bluetooth (out-of-tree btusb_mt7902)
+Documentation=file:///home/deck/git/steam-machine/hardware/bluetooth/README.md
+# SteamOS A/B updates replace the whole /usr tree, taking the module and the
+# firmware blob with them. This restores both from the cache under /home.
+# Normal case is a sub-second file copy; it only rebuilds (needing pacman and
+# the network) when the kernel version has actually changed.
+#
+# Deliberately NOT an early-boot unit: it reads the cache from /home and may
+# need pacman, so it waits for local filesystems and the network. Binding does
+# not depend on running before btusb -- the script moves the device across
+# explicitly, and /etc/modprobe.d/mt7902-bt.conf handles the load order.
+After=local-fs.target network-online.target
+Wants=network-online.target
+Before=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/bluetooth/install.sh --boot
+# A rebuild after a kernel change retries pacman internally (5 x 30s).
+TimeoutStartSec=600
+# Nothing else depends on this unit, so a failure cannot block boot -- and the
+# USB dongle stays as the fallback. Let it fail visibly in systemctl status.
+
+[Install]
+WantedBy=multi-user.target

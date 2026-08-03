@@ -1,0 +1,26 @@
+[Unit]
+Description=Restore the inbound-IPv6 firewall rules after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/system/firewall/README.md
+# The rules live in firewalld's permanent config under /etc/firewalld, which is
+# NOT on SteamOS's atomic-update keep list. Allowlisting the zone file would be
+# the wrong fix -- public.xml is a file firewalld and SteamOS both own, and
+# pinning this machine's copy would freeze it against every future upstream
+# change. So the rules are expected to disappear on an A/B update, and this
+# puts them back instead.
+#
+# The failure it prevents is silent: nothing breaks when the rules vanish, the
+# machine just quietly goes back to accepting inbound IPv6 on 1024-65535.
+After=firewalld.service network-online.target
+Wants=firewalld.service
+Requires=firewalld.service
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/system/firewall/install.sh --boot
+# --boot is a no-op when the rules are already present, so this is cheap on a
+# normal boot. It re-asserts the conntrack ordering check before adding
+# anything, and fails visibly in `systemctl status` rather than blocking boot.

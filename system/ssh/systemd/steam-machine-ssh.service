@@ -1,0 +1,28 @@
+[Unit]
+Description=Restore Steam Machine sshd policy after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/system/ssh/README.md
+# Neither /etc/ssh/sshd_config.d/10-steam-machine.conf nor the
+# atomic-update.conf.d entry that preserves it is on SteamOS's default keep
+# list -- that list covers /etc/ssh/*_key and *_key.pub only. So both can be
+# gone after an A/B update, silently reverting AllowUsers, PermitRootLogin and
+# the keepalives to stock Arch defaults.
+#
+# Ordered before sshd so a restored config is in place for the first
+# connection, rather than only from the following reload. sshd.service is
+# socket-activated on some configurations, hence Before= on both.
+After=local-fs.target
+Before=sshd.service sshd.socket
+Wants=local-fs.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/system/ssh/install.sh --boot
+# install.sh --boot validates with `sshd -t` and rolls back rather than
+# installing a config that would stop sshd starting. If it fails anyway, that
+# must be visible in `systemctl status` but must not block boot -- an
+# unbootable machine is worse than one running stock ssh defaults.
+SuccessExitStatus=0
