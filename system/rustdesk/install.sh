@@ -77,21 +77,42 @@ relock_rootfs() {
 #
 # Single-host prefixes (/32, /128) are skipped -- SLAAC hands out a /128 for the
 # DHCPv6 address, and whitelisting that would allow exactly one host: itself.
+# Reads routes as well as addresses, and generalises the two non-routable ranges -- the same derivation system/firewall uses, for the same two reasons.
+#
+# Addresses alone miss the RA-advertised ULA, which has an on-link route but no address on this interface. That is not theoretical: it left RustDesk over the ULA being dropped by RustDesk's own rule, with no error anywhere.
+#
+# And pinning whatever /64 happens to be live is a bug this network keeps proving. pfSense has renumbered the ULA twice now (fd50:fdf7:233::/64 -> fde4:ff5:dc44:476e::/64 -> back again), silently invalidating the pinned rule each time. fc00::/7 and fe80::/10 are not routable on the internet, so allowing each whole range costs nothing. The GUA cannot be generalised -- allowing 2000::/3 would defeat the point -- so it stays pinned and goes stale on re-delegation, which the ExecStartPre re-derivation on every service start is what recovers from.
 lan_cidrs() {
-    ip -o addr show "$IFACE" 2>/dev/null | awk '{print $4}' | python3 -c '
+    {
+        ip -o addr show "$IFACE" 2>/dev/null | awk '{print $4}'
+        ip -o -6 route show dev "$IFACE" 2>/dev/null | awk '{print $1}'
+        ip -o -4 route show dev "$IFACE" 2>/dev/null | awk '{print $1}'
+    } | python3 -c '
 import sys, ipaddress
 seen = []
+ula = ipaddress.ip_network("fc00::/7")
+ll = ipaddress.ip_network("fe80::/10")
 for line in sys.stdin:
     line = line.strip()
-    if not line:
+    if not line or line == "default":
         continue
     try:
-        iface = ipaddress.ip_interface(line)
+        net = ipaddress.ip_interface(line).network
     except ValueError:
         continue
-    if iface.ip.is_loopback or iface.network.prefixlen == iface.network.max_prefixlen:
+    # /128 and /32 are single hosts -- SLAAC hands one out for the DHCPv6
+    # address, and allowing it would permit exactly one host: this one.
+    if net.num_addresses == 1 or net.network_address.is_loopback:
         continue
-    cidr = str(iface.network)
+    if net.version == 6:
+        if net.subnet_of(ula):
+            cidr = "fc00::/7"
+        elif net.subnet_of(ll):
+            cidr = "fe80::/10"
+        else:
+            cidr = str(net)
+    else:
+        cidr = str(net)
     if cidr not in seen:
         seen.append(cidr)
 print(",".join(seen))
@@ -118,6 +139,15 @@ apply_firewall() {
     zone="$(firewall-cmd --get-default-zone 2>/dev/null || echo public)"
     cidrs="$(lan_cidrs)"
     [[ -n "$cidrs" ]] || { warn "could not derive LAN subnets; NOT touching the firewall"; return 0; }
+
+    # Reconcile, do not just add. Without this the accepts only ever accumulate:
+    # every prefix change leaves the previous CIDR's rule behind forever. That
+    # is not hypothetical -- generalising fe80::/64 to fe80::/10 left the old
+    # /64 rule sitting in the zone. Harmless in that instance because one is a
+    # subset of the other, but a re-delegated GUA would leave a stale accept for
+    # a prefix that now belongs to somebody else. Removing first is safe: this
+    # only ever matches rules carrying port="$PORT".
+    remove_firewall
 
     # Order matters. A negative priority sorts the accepts ahead of the drop;
     # without it firewalld's default ordering would let the drop win for

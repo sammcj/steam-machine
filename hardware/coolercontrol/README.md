@@ -189,7 +189,7 @@ Measured 2026-08-02, idle:
 | ------ | -------- | ---- | ---- | --------- | ------- |
 | `fan1` | 0        | 482  | 1196 | `pwm1`    | stops dead → a fan |
 | `fan3` | **1516** | 1912 | 2419 | `pwm3`    | responds but never stops → a pump |
-| `fan5` | 1548     | 1544 | 1548 | *nothing* | fixed speed, uncontrolled |
+| `fan5` | 1548     | 1544 | 1548 | *nothing* | 3-pin fan on a PWM-mode header — see below |
 | `fan2` | 0        | 0    | 0    | —         | unpopulated header |
 
 Two of the three fall out of this without touching the case. `fan1` is the only
@@ -204,18 +204,21 @@ Airflow by hand turned out to be a poor signal for `pwm3` — the pump's spin-do
 takes longer than the ~5 s you can hold a hand there, and it moves no air. Trust
 the 0%-floor test instead.
 
-## The case fan is not controllable
+## The case fan: fixed, then stalling (resolved 2026-08-03)
 
-`fan5` ignores all five PWM channels — the sweep above swept every one,
-including `pwm4`, and it never moved off ~1545 rpm. So the rear case fan runs
-flat out permanently and **CoolerControl cannot ever regulate it**; this is not
-a daemon or driver problem and there is no software fix.
+The table above was measured while the CPU_OPT header was in **PWM mode** with what turned out to be a **3-pin (DC) fan** on it. A 3-pin fan ignores the PWM pin and sees a permanent 12 V, which is exactly the observed signature: ~1545 rpm regardless of duty, unresponsive to all five channels. The diagnosis in the original write-up was right, and the header was subsequently set to **Voltage/DC** in BIOS.
 
-The cause is on the CPU_OPT header and both fixes are in BIOS (Smart Fan 6):
-either the fan is 3-pin (DC) while the header is in PWM mode, which pins it at
-full speed — set the header to Voltage/DC — or the header is set to Full Speed
-outright, in which case set it to Auto/Manual. Worth doing: it is a permanent
-contributor to the idle noise floor in a living-room machine.
+That made it controllable — and introduced a new failure. In DC mode the duty *is* the voltage, and the BIOS was driving that header at ~20%, roughly 2.4 V. That is below the fan's start-up voltage, so from a standstill it never spins:
+
+```
+fan5 = 0 rpm      while pwm5 = 20-26%     <- stalled, not idle
+```
+
+Measured directly: forcing `pwm5` to 255 started it at 1513 rpm, and handing control back to the BIOS (`pwm5_enable = 2`) left it running at 1537-1562 rpm. A DC fan needs far more voltage to break stiction than to keep turning, so once started it sustains at a duty it could never have started from.
+
+**Unverified, and the thing to watch:** whether the BIOS returns that header to a low duty on a cold boot and strands the fan at 0 rpm again. Check `fan5_input` after the next reboot. If it reads 0, raise the header's start-up/minimum duty in Smart Fan 6 (DC fans typically need ~40-50% to start), or set a start-boost if the BIOS offers one.
+
+Worth getting right rather than reverting to PWM mode: at PWM the fan is stuck at full and is a permanent contributor to the idle noise floor of a living-room machine.
 
 ## History is in memory only
 

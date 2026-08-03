@@ -80,8 +80,7 @@ desired rule set against what is installed and rewrites when they differ, so a
 renumber self-corrects on the next boot. Recovery from a mid-session renumber is
 therefore a reboot, or reaching the box over IPv4.
 
-The prefixes are never written into this repo. It is public and the IPv6 prefix
-is a real routable address.
+The **globally-routable** prefix is never written into this repo, which is public — it is derived at runtime and only ever appears in live `--status` output. The ULAs above are a deliberate exception: they are `fc00::/7`, not routable from anywhere off this LAN, and naming the two the network actually used is what makes the renumbering story legible.
 
 ### ICMPv6
 

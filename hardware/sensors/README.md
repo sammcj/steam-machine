@@ -84,7 +84,7 @@ loops for 70 s, sample again, stop and sample once more.
 | `temp2`  | 39 °C | 38 °C     | 38 °C   | board / chipset / M.2 area          |
 | `fan1`   | 1102  | **1679**  | 1180    | **AIO radiator fans** — ramps       |
 | `fan3`   | 2220  | **3139**  | 2213    | **AIO pump** — too fast for a 120mm |
-| `fan5`   | 1548  | 1510      | 1544    | **case fan** — never varies         |
+| `fan5`   | 1548  | 1510      | 1544    | **case fan** — see note below       |
 | `fan2`   | 0     | 0         | 0       | empty header                        |
 | `temp1`  | 19 °C | 19 °C     | 19 °C   | unconnected — `ignore`              |
 | `temp4`  | 22 °C | 22 °C     | 22 °C   | unconnected — `ignore`              |
@@ -96,8 +96,7 @@ describe verified function rather than header names.
 All three fan labels were re-confirmed on 2026-08-02 by an independent method —
 injecting duty on one `pwmN` at a time and watching every tach, rather than
 inferring from thermal response. It also pinned the `pwm`↔`fan` pairing
-(`pwm1`→`fan1`, `pwm3`→`fan3`) and showed `fan5` has no controlling channel at
-all. See [hardware/coolercontrol/](../coolercontrol/README.md#proving-which-tach-is-which-fan).
+(`pwm1`→`fan1`, `pwm3`→`fan3`) and showed `fan5` responding to nothing. That last part was a symptom, not a property: the CPU_OPT header was in PWM mode with a 3-pin DC fan on it, so the fan saw a permanent 12 V and ignored every channel. The header is now set to Voltage/DC and `pwm5` does drive `fan5` — but the BIOS's low duty is below the fan's start-up voltage, so it can read 0 rpm from a standstill. See [hardware/coolercontrol/](../coolercontrol/README.md#proving-which-tach-is-which-fan).
 
 Two further findings:
 
