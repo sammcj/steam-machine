@@ -263,9 +263,26 @@ PY
 # and nothing listening on 21118.
 #
 # The service must be stopped around this, or the sync loop races the write.
+# Bounded wait around lan_cidrs. Ordering the unit after network-online.target
+# fixes the common case, but that target can be reached before IPv6 RA has been
+# answered, and the whitelist needs the v6 prefixes as much as the v4 one. Polls
+# rather than sleeping a fixed amount so a warm boot costs nothing.
+#
+# Returns empty on timeout and lets the caller decide -- this must never hang a
+# boot forever waiting for a network that is not coming.
+lan_cidrs_wait() {
+    local deadline=$(( SECONDS + ${LAN_WAIT_SECS:-45} )) cidrs
+    while :; do
+        cidrs="$(lan_cidrs)"
+        [[ -n "$cidrs" ]] && { echo "$cidrs"; return 0; }
+        [[ $SECONDS -ge $deadline ]] && return 0
+        sleep 2
+    done
+}
+
 write_config() {
-    local cidrs; cidrs="$(lan_cidrs)"
-    [[ -n "$cidrs" ]] || die "could not derive LAN subnets for the whitelist"
+    local cidrs; cidrs="$(lan_cidrs_wait)"
+    [[ -n "$cidrs" ]] || die "could not derive LAN subnets for the whitelist after ${LAN_WAIT_SECS:-45}s -- is the interface up?"
 
     local was_active=0
     if systemctl is-active --quiet "$UNIT" 2>/dev/null; then

@@ -5,13 +5,25 @@ Documentation=file:///home/deck/git/steam-machine/system/rustdesk/README.md
 # ordering after NetworkManager so the firewall rules have a live interface to
 # scope themselves to.
 Requires=network.target
-After=systemd-user-sessions.service NetworkManager.service
+# network-online.target, not just NetworkManager.service: the latter is satisfied
+# once the daemon is running, which on this machine is ~3 s before enp9s0 gets
+# carrier. Starting that early left lan_cidrs() with no addresses and no routes,
+# so ExecStartPre died and the whole service failed the boot -- silently, since a
+# failed unit is not something anyone looks at until remote access is needed.
+# NetworkManager-wait-online.service is enabled here, so this target is real.
+Wants=network-online.target
+After=systemd-user-sessions.service NetworkManager.service network-online.target firewalld.service
 
 [Install]
 WantedBy=multi-user.target
 
 [Service]
 Type=simple
+# Ordering above is necessary but not sufficient -- IPv6 RA can arrive after
+# network-online.target is reached. Combined with the bounded wait in --boot,
+# this turns a lost race into a delay rather than a dead service until reboot.
+Restart=on-failure
+RestartSec=10s
 
 # SteamOS A/B updates replace the whole /usr tree, taking /usr/bin/rustdesk and
 # /usr/share/rustdesk with them. This unit survives -- /etc/systemd/system is on

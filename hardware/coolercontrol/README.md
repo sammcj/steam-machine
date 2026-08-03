@@ -216,7 +216,7 @@ fan5 = 0 rpm      while pwm5 = 20-26%     <- stalled, not idle
 
 Measured directly: forcing `pwm5` to 255 started it at 1513 rpm, and handing control back to the BIOS (`pwm5_enable = 2`) left it running at 1537-1562 rpm. A DC fan needs far more voltage to break stiction than to keep turning, so once started it sustains at a duty it could never have started from.
 
-**Unverified, and the thing to watch:** whether the BIOS returns that header to a low duty on a cold boot and strands the fan at 0 rpm again. Check `fan5_input` after the next reboot. If it reads 0, raise the header's start-up/minimum duty in Smart Fan 6 (DC fans typically need ~40-50% to start), or set a start-boost if the BIOS offers one.
+**Resolved by raising the minimum duty to 30% in Smart Fan 6.** Verified across a cold boot: `fan5` comes up at 586 rpm on 30% duty, where it had been reading 0 rpm at 20-26%. So the start threshold sits between 26% and 30%, and the floor is now set at the first value observed to work rather than comfortably above it. If this fan ever reads 0 rpm again, that margin is the first thing to check — a stalled DC fan is silent in every sense, since the tach reads 0 exactly as an idle fan would.
 
 Worth getting right rather than reverting to PWM mode: at PWM the fan is stuck at full and is a permanent contributor to the idle noise floor of a living-room machine.
 

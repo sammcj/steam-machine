@@ -96,7 +96,7 @@ describe verified function rather than header names.
 All three fan labels were re-confirmed on 2026-08-02 by an independent method —
 injecting duty on one `pwmN` at a time and watching every tach, rather than
 inferring from thermal response. It also pinned the `pwm`↔`fan` pairing
-(`pwm1`→`fan1`, `pwm3`→`fan3`) and showed `fan5` responding to nothing. That last part was a symptom, not a property: the CPU_OPT header was in PWM mode with a 3-pin DC fan on it, so the fan saw a permanent 12 V and ignored every channel. The header is now set to Voltage/DC and `pwm5` does drive `fan5` — but the BIOS's low duty is below the fan's start-up voltage, so it can read 0 rpm from a standstill. See [hardware/coolercontrol/](../coolercontrol/README.md#proving-which-tach-is-which-fan).
+(`pwm1`→`fan1`, `pwm3`→`fan3`) and showed `fan5` responding to nothing. That last part was a symptom, not a property: the CPU_OPT header was in PWM mode with a 3-pin DC fan on it, so the fan saw a permanent 12 V and ignored every channel. The header is now set to Voltage/DC and `pwm5` does drive `fan5`. Its minimum duty needed raising to 30% as well: below that the DC voltage is under the fan's start-up threshold and it sits stalled at 0 rpm, indistinguishable from an idle fan. See [hardware/coolercontrol/](../coolercontrol/README.md#proving-which-tach-is-which-fan).
 
 Two further findings:
 
