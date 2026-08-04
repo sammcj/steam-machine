@@ -163,6 +163,33 @@ peer string parses as an IP — `Client::_start()` returns a plain
 Switch to Desktop Mode before connecting. Game Mode is not what this is
 configured for.
 
+## Turning it on and off
+
+There is no front end for this — `install.sh` has no `--enable`/`--disable` the way `hardware/coolercontrol/` does. It is plain systemd:
+
+```bash
+sudo systemctl stop rustdesk             # stop now; still starts on the next boot
+sudo systemctl start rustdesk
+
+sudo systemctl disable --now rustdesk    # stop now, and don't start on boot
+sudo systemctl enable --now rustdesk
+
+./install.sh --status                    # unit state, config, firewall, listener
+```
+
+Nothing is uninstalled either way. The binary, the config, the unit and the cached package all stay put, so re-enabling is instant and needs no re-provisioning — `--password` in particular does not need doing again.
+
+**Both states survive a SteamOS A/B update.** The enable symlink lives under `/etc/systemd/system/multi-user.target.wants/`, which is on the keep list, and "off" is simply the absence of that symlink.
+
+**Any `start` or `enable --now` re-applies the firewall rules**, because they run the unit's `ExecStartPre=install.sh --boot`, which restores `/usr/bin/rustdesk` and calls `apply_firewall`. This matters because those rich rules are deliberately runtime-only, not `--permanent` (`/etc/firewalld` is not keep-listed) — so they do not survive a reboot on their own, and the service starting is what puts them back.
+
+The corollary: **`stop` and `disable` do not remove the rules** — only `--uninstall` does. That is harmless, since a rule restricting a port nothing is listening on costs nothing, but it does mean `firewall-cmd --list-rich-rules` still showing 21118 is not evidence the service is running. Check the unit, not the firewall.
+
+Two traps, both covered in more detail above:
+
+- **Do not use `stop-service = "Y"` as the off switch.** It is not a "pause the rendezvous registration" flag — `direct_server()` reads the same value, so it takes the direct-IP listener down with it, and it runs `systemctl disable rustdesk` on the next start. Use `systemctl` and leave the config alone.
+- **Stop the service before editing `RustDesk2.toml`.** Root's copy wins at `--server` startup and propagates downward, so editing it live is racing the sync loop.
+
 ## Gotchas worth remembering
 
 - **"Unattended" is not fully unattended on the first connection.** The KDE
