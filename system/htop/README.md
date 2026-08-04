@@ -89,7 +89,7 @@ So, for temperature, the options in increasing order of usefulness:
 
 - Turn `show_cpu_temperature` off in htop; it only adds `N/A` noise across most of the row.
 - `watch -n1 sensors` for the actual `Tctl` / `Tccd1` values.
-- **CoolerControl** on port 11987 — already running, and the only one of these that plots temperature over time. See [hardware/coolercontrol/](../../hardware/coolercontrol/README.md).
+- **CoolerControl** on port 11987 — the only one of these that plots temperature over time. Off by default; `coolercontrol on` starts it for a measurement session. See [hardware/coolercontrol/](../../hardware/coolercontrol/README.md).
 
 For **frequency**, htop's Text meter mode (`column_meter_modes` entry `2` instead of `1`) is far more legible than the bar:
 

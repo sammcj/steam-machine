@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # CoolerControl daemon + web UI, for logging this build's temps over time.
 #
-#   ./install.sh              download (verified), install, configure, start
+#   ./install.sh              download (verified), install, configure, verify it
+#                             runs -- then leave it OFF (see below)
 #   ./install.sh --lan        as above, but bind the UI to the LAN, not just
 #                             localhost  (see README -- this is unauthenticated
 #                             read access and authenticated write access)
@@ -13,6 +14,13 @@
 #                             installed and configured)
 #   ./install.sh --enable     undo --disable
 #   ./install.sh --uninstall  remove daemon, service and config
+#
+# The daemon is installed disabled and stays that way until asked for: it is a
+# root process polling hwmon and the Super I/O continuously, with a LAN-reachable
+# read/write API, and it is only wanted while measuring something. The shell
+# function in bashrc.d/coolercontrol.sh is the front end for that -- `coolercontrol
+# on`, reboot into gaming mode, measure, `coolercontrol off` -- and is just a
+# wrapper over --enable/--disable here.
 #
 # Only the daemon is installed. Since v4 it embeds the whole web UI and serves
 # it itself, so the separate desktop/Tauri app buys nothing on a machine whose
@@ -40,6 +48,9 @@ KEEP_SRC="$REPO_DIR/atomic-update.conf.d/steam-machine-coolercontrol.conf"
 KEEP_DEST="/etc/atomic-update.conf.d/steam-machine-coolercontrol.conf"
 SERVICE="coolercontrold.service"
 PORT=11987
+BASHRC="/home/deck/.bashrc"
+BASHRC_SNIPPET="$REPO_DIR/bashrc.d/coolercontrol.sh"
+BASHRC_MARKER="# steam-machine: coolercontrol on/off"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
@@ -145,6 +156,20 @@ ensure_keep_entry() {
     fi
 }
 
+# The shell function is sourced from the repo rather than copied into .bashrc,
+# so editing bashrc.d/coolercontrol.sh takes effect in the next shell with no
+# reinstall. Guarded by a marker comment so this stays idempotent.
+ensure_bashrc() {
+    [[ -f "$BASHRC" ]] || { warn "$BASHRC does not exist -- skipping shell function"; return 0; }
+    if grep -qF "$BASHRC_MARKER" "$BASHRC"; then
+        return 0
+    fi
+    log "adding coolercontrol shell function to $BASHRC"
+    printf '\n%s\n[[ -f %s ]] && . %s\n' \
+        "$BASHRC_MARKER" "$BASHRC_SNIPPET" "$BASHRC_SNIPPET" >> "$BASHRC"
+    chown deck:deck "$BASHRC" 2>/dev/null || true
+}
+
 # --- install ------------------------------------------------------------------
 do_install() {
     need_root
@@ -153,6 +178,7 @@ do_install() {
     ensure_keep_entry
     install -Dm644 "$REPO_DIR/systemd/coolercontrold.service" "$UNIT"
     systemctl daemon-reload
+    ensure_bashrc
 
     # The daemon owns config.toml and writes its in-memory state back over the
     # file when it shuts down. Editing it under a running daemon looks like it
@@ -161,14 +187,31 @@ do_install() {
     # start. (--boot needs no such care; it runs as ExecStartPre.)
     systemctl stop "$SERVICE" 2>/dev/null || true
     configure
-    log "enabling $SERVICE"
-    systemctl enable --now "$SERVICE"
 
+    # Started once here even though the end state is off: a bad binary, a broken
+    # config or a failing ExecStartPre should surface now, not weeks later when
+    # `coolercontrol on` is typed in front of a benchmark that was about to run.
+    log "starting $SERVICE once to verify the install"
+    systemctl start "$SERVICE"
     sleep 3
     systemctl is-active --quiet "$SERVICE" \
         || die "daemon failed to start -- journalctl -u $SERVICE"
+    # The unit goes active a second or two before the API binds, so poll rather
+    # than curl once. An active unit that never answers is still a broken
+    # install, and this is the last chance to notice before it is switched off.
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        curl -fsS --max-time 2 "http://localhost:$PORT/handshake" >/dev/null 2>&1 && break
+        [[ $i -eq 10 ]] && die "daemon is running but the API never answered on port $PORT"
+        sleep 1
+    done
     verify_no_pwm_writes
-    log "done -- UI at http://localhost:$PORT"
+    log "verified -- API answered on http://localhost:$PORT"
+
+    # ...and then off, which is the default state. Everything stays installed
+    # and configured; only the systemd enablement is withdrawn.
+    systemctl disable --now "$SERVICE"
+    log "done -- installed but OFF; turn it on with 'coolercontrol on' (new shell)"
 }
 
 # --- boot ---------------------------------------------------------------------
@@ -220,6 +263,8 @@ do_status() {
     printf 'config:   %s\n' "$([[ -f "$CONFIG" ]] && echo "$CONFIG" || echo 'absent')"
     printf 'keep:     %s\n' "$(cmp -s "$KEEP_SRC" "$KEEP_DEST" && echo "$KEEP_DEST" \
         || echo 'MISSING or stale -- config will not survive an OS update')"
+    printf 'bashrc:   %s\n' "$([[ -f "$BASHRC" ]] && grep -qF "$BASHRC_MARKER" "$BASHRC" \
+        && echo "hook present ('coolercontrol on|off|status')" || echo 'hook NOT present')"
     if [[ -f "$CONFIG" ]]; then
         sed -n '/^\[settings\]/,/^\[/p' "$CONFIG" | grep -E '^(apply_on_boot|liquidctl_integration|ipv4_address|allow_unencrypted|poll_rate)' || true
     fi
@@ -230,20 +275,27 @@ do_status() {
 }
 
 # --- on/off -------------------------------------------------------------------
-# Nothing is removed -- the binary, config and keep entry all stay put, so --enable
-# brings it back exactly as it was. The enable symlink lives under
-# /etc/systemd/system/multi-user.target.wants/, which is on the default keep
-# list, so "off" survives a SteamOS A/B update just as "on" does.
+# Off is the default state here, and these two are what the `coolercontrol`
+# shell function calls. Nothing is removed -- the binary, config and keep entry
+# all stay put, so --enable brings it back exactly as it was. The enable symlink
+# lives under /etc/systemd/system/multi-user.target.wants/, which is on the
+# default keep list, so "on" survives a SteamOS A/B update; "off" is the absence
+# of that symlink and so survives trivially.
 do_disable() {
     need_root
     systemctl disable --now "$SERVICE"
-    log "stopped, and will not start on boot -- ./install.sh --enable to undo"
+    log "stopped, and will not start on boot -- 'coolercontrol on' to undo"
 }
 
 do_enable() {
     need_root
+    # enable --now, so ExecStartPre (--boot) runs and re-asserts the
+    # monitoring-only settings against whatever the last A/B update left behind.
     systemctl enable --now "$SERVICE"
-    log "started, and will start on boot"
+    sleep 2
+    systemctl is-active --quiet "$SERVICE" \
+        || die "daemon failed to start -- journalctl -u $SERVICE"
+    log "started, and will start on boot until 'coolercontrol off'"
 }
 
 do_uninstall() {
@@ -254,6 +306,7 @@ do_uninstall() {
     rm -rf "$INSTALL_DIR"
     log "removed daemon, unit and keep entry"
     log "left in place: $CONFIG, /var/lib/coolercontrol, $CACHE_DIR"
+    warn "the '$BASHRC_MARKER' block in $BASHRC is left in place -- remove it by hand"
 }
 
 case "${1:-}" in

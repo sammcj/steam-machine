@@ -4,9 +4,12 @@ Web-based temperature, fan and power monitoring, on port **11987** — from this
 machine at [http://localhost:11987](http://localhost:11987), and from anywhere
 on the home network at `http://<this machine>:11987`.
 
-**Status: working.** Monitoring only, in the sense that it never touches the fan
-curves — see [Deliberately read-only](#deliberately-read-only). The *API* is
-read/write and password-protected; see [Network exposure](#network-exposure).
+**Status: working, and off by default.** Installed but disabled — turn it on for
+a measurement session with `coolercontrol on` and off again after; see
+[Off by default](#off-by-default). Monitoring only, in the sense that it never
+touches the fan curves — see [Deliberately read-only](#deliberately-read-only).
+The *API* is read/write and password-protected; see
+[Network exposure](#network-exposure).
 
 Builds on [hardware/sensors/](../sensors/README.md): CoolerControl reads hwmon,
 so everything that setup exposed (IT8696E fan RPM and VRM temps, SATA SSD
@@ -31,6 +34,7 @@ standalone x86_64 binary per release, which is what this uses: it links only
 | `/etc/coolercontrol/*`                                | **only via the keep entry below**            |
 | `/etc/atomic-update.conf.d/steam-machine-coolercontrol.conf` | yes — keeps itself             |
 | `~/.cache/steam-machine-coolercontrol/`               | yes — download cache                         |
+| `~/.bashrc` hook → `bashrc.d/coolercontrol.sh`        | yes — `/home` is its own partition           |
 
 Nothing lands in `/usr`, so unlike `it87` there is no module to rebuild. The
 binary is root-owned despite living under `/home`: systemd runs it as root, and
@@ -67,23 +71,57 @@ new state file a future CoolerControl release adds.
 
 `./install.sh --status` reports whether the keep entry is present and current.
 
+## Off by default
+
+The daemon is a root process polling hwmon and the Super I/O every couple of
+seconds, with a read/write API reachable from the whole LAN, and it is only
+actually wanted while measuring something. So the install leaves it disabled and
+it is turned on per session:
+
+```bash
+coolercontrol on       # start now, and on every boot until turned off
+# reboot back into gaming mode, run the benchmark, watch the graphs
+coolercontrol off      # stop now, don't start on boot
+```
+
+`coolercontrol` is a shell function from `bashrc.d/coolercontrol.sh`, sourced by
+`~/.bashrc` (the installer adds the one `source` line; editing the snippet takes
+effect in the next shell, no reinstall). It also takes `status` (the default),
+`ui` and `logs [N]`. It handles sudo itself — its own prompt on a real terminal,
+the graphical askpass on the TV when there is no TTY.
+
+**"On" deliberately persists across reboots**, which is the whole point: enable
+it from a shell, reboot into gaming mode, and it is still there collecting. The
+enable symlink lives under `/etc/systemd/system/multi-user.target.wants/`, on the
+default SteamOS keep list, so that survives an A/B update too. "Off" is the
+absence of that symlink, so it survives trivially — a disabled daemon never
+quietly comes back.
+
+Nothing is removed either way: binary, config, password and keep entry all stay
+put, so `on` brings it back exactly as it was. And because `on` is
+`systemctl enable --now`, the unit's `ExecStartPre` runs and re-asserts
+`apply_on_boot = false` before the daemon can touch anything — so an OS update
+in the meantime cannot resurrect fan control behind your back.
+
 ## Usage
 
 ```bash
-SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh       # install + start
-SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh --lan # also listen on the LAN
+SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh       # install, verify, leave OFF
+SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh --lan # as above, also listen on the LAN
 ./install.sh --status
-SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh --disable # stop, and don't start on boot
-SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh --enable  # undo --disable
+SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh --disable # what `coolercontrol off` calls
+SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh --enable  # what `coolercontrol on` calls
 SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A ./install.sh --uninstall
 ```
 
 `--disable` / `--enable` are thin wrappers over `systemctl disable --now` /
-`enable --now`. Nothing is removed, so `--enable` brings it back exactly as it
-was. The enable symlink lives under
-`/etc/systemd/system/multi-user.target.wants/`, which is on the default keep
-list, so a disabled daemon stays disabled across an OS update rather than
-quietly coming back. `--status` shows which it currently is.
+`enable --now`; prefer the `coolercontrol` function, which is the same thing
+without the sudo incantation. `--status` shows which state it is in, and whether
+the `~/.bashrc` hook is in place.
+
+A fresh `./install.sh` still starts the daemon once and checks the API answers
+before disabling it — a bad binary or a broken config should surface at install
+time, not weeks later in front of a benchmark that was about to run.
 
 `--boot` also exists but is for the service's `ExecStartPre`, not for typing —
 see [`/etc/coolercontrol` needs an explicit keep entry](#etccoolercontrol-needs-an-explicit-keep-entry).

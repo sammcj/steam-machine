@@ -82,4 +82,4 @@ Two workarounds, neither applied:
 
 - **Quit btop before running the installer.** btop rewrites `btop.conf` on exit, so edits made while it is running are discarded. `install.sh` refuses to run if it sees a live btop rather than losing the change silently.
 - The library gives btop real per-GPU data, unlike the CPU temperature situation described in [system/htop/](../htop/README.md) — GPU sensors genuinely are per-device, so nothing here is a repeated package figure.
-- For temperature and power *over time*, CoolerControl on port 11987 is still the better tool. See [hardware/coolercontrol/](../../hardware/coolercontrol/README.md).
+- For temperature and power *over time*, CoolerControl on port 11987 is still the better tool — off by default, `coolercontrol on` starts it. See [hardware/coolercontrol/](../../hardware/coolercontrol/README.md).
