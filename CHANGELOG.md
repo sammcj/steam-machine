@@ -12,6 +12,7 @@
 - Recorded the counter-intuitive part: `steamdeck_publicbeta` is the beta of the **Deck client lineage**, not a newer desktop client. Client versions are Unix timestamps, so generic **stable** (`1785799196`, 2026-08-04 09:19) is 5 days 5 hours **newer** than the SteamOS **beta** (`1785347151`, 2026-07-30 03:45). The gap is not the explanation though — Triton shipped in May 2026 and was never merged into the Deck lineage at all.
 - Separately noted: the neptune kernel's `hid-steam` carries IDs for `1205`/`1142`/`1102` only, so all five puck interfaces fall to `hid-generic`. Upstream mainline has not added `1302`/`1304` either. Not the cause of anything above, and it would need a kernel change rather than anything droppable in `/etc`.
 - **Bug report drafted and ready to file** at `hardware/controller/steam-controller-2026-bug-report.md`, targeting ValveSoftware/SteamOS, with device serials and the Steam account ID redacted. Cross-references [steam-for-linux#13185](https://github.com/valvesoftware/steam-for-linux/issues/13185), open since May 2026 with no Valve response.
+- Added the Steam Controller (2026) and its wireless puck to the hardware table in the README ($270.00 AUD).
 - The Flatpak client was **removed again** once the comparison was done, with `--delete-data` and an `--unused` sweep (only `org.freedesktop.Platform.codecs_extra.i386` was orphaned). Verified: no Valve flatpak listed, sandbox home gone, user flatpak tree back to its 6.1 GB baseline, native install untouched.
 
 ## 2026-08-04

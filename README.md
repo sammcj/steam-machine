@@ -126,7 +126,7 @@ Other parts
 | Product                                    | SKU / Part | Cost (AUD) (inc GST) |
 | ------------------------------------------ | ---------- | -------------------: |
 | Playstation 5 DualSense (already had)      |            |                $0.00 |
-| Steam Controller (2026) + wireless puck     |            |                      |
+| Steam Controller (2026) + wireless puck    |            |              $270.00 |
 | Turtle Beach Headset (already had)         |            |                $0.00 |
 | TV - LG OLED C9 75" 4K 120Hz (already had) |            |                $0.00 |
 | Crucial 2TB SATA SSDs x2                   |            |                $0.00 |
