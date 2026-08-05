@@ -69,6 +69,17 @@ Cause unresolved; not recurring; `underflow` was `0` throughout, so never bandwi
 
 #### Controller wake from sleep (H)
 - Wake from bluetooth controller not working (Playstation 5 DualSense)
+- There is an upstream report that the 2026 Steam Controller and its puck also fail to wake from suspend ([bazzite#4873](https://github.com/ublue-os/bazzite/issues/4873)) — **not tested here**, noted only because it touches the same item.
+
+#### Steam Controller (2026) shows as a Steam Deck (M)
+
+Diagnosed 2026-08-05, **no local fix**. The controller works, but Steam names it a Steam Deck and gives it Deck glyphs and Deck config templates. Correct on a MacBook Pro with the same controller.
+
+Not a detection or permissions problem — Steam reads the descriptors correctly (`Product: Steam Controller Puck`). The `steamdeck_*` client branch SteamOS pins itself to simply has **no support for the controller's codename, Triton**: 1 matching symbol in `steamclient.so` against 164 in the generic client, and no `controller_steamcontroller_triton` in its `steamui` type table. Unrecognised types hit the `default:` arm of the type switch, which is grouped with `case 4` — Neptune. So anything unknown renders as a Deck.
+
+Proved both ways: statically by diffing the two clients, and empirically — installing the generic client via Flatpak on this machine identified the controller correctly and immediately, with the client branch as the only variable. InputPlumber, udev, the `-steamdeck` flag and a stale install were each checked and ruled out. The kernel's `hid-steam` also lacks IDs for `1302`/`1304`, but that is a separate gap and not the cause.
+
+Unfixable locally: `/usr/bin/steam-jupiter` rewrites `package/beta` back to `steamdeck_stable` whenever it names either generic branch, and both sessions go through that wrapper. The in-client menu offers only Deck Stable and Deck Beta, and Stable is *behind* Beta. Needs Valve to merge Triton into the Deck client lineage. See [hardware/controller/](hardware/controller/README.md), with a report ready to file at [hardware/controller/steam-controller-2026-bug-report.md](hardware/controller/steam-controller-2026-bug-report.md).
 
 #### Disabling RGB Lighting (M)
 RBG is pretty tacky and certainly distracting in a living room environment.
@@ -115,6 +126,7 @@ Other parts
 | Product                                    | SKU / Part | Cost (AUD) (inc GST) |
 | ------------------------------------------ | ---------- | -------------------: |
 | Playstation 5 DualSense (already had)      |            |                $0.00 |
+| Steam Controller (2026) + wireless puck     |            |                      |
 | Turtle Beach Headset (already had)         |            |                $0.00 |
 | TV - LG OLED C9 75" 4K 120Hz (already had) |            |                $0.00 |
 | Crucial 2TB SATA SSDs x2                   |            |                $0.00 |
