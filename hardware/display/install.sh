@@ -322,6 +322,13 @@ do_install() {
     local _pkgbase _img
     _pkgbase="$(cat "/usr/lib/modules/$(uname -r)/pkgbase" 2>/dev/null || true)"
     _img="/boot/initramfs-${_pkgbase}.img"
+    # The hand-built FRL kernel has no pkgbase (it is not a pacman package) and
+    # keeps its images in /boot/frl/ so that GRUB's 10_linux never globs them --
+    # see ../kernel/README.md. Without this, every run warns on that kernel.
+    if [[ -z "$_pkgbase" && -f /boot/frl/initramfs-linux-frlprobe.img ]]; then
+        _img="/boot/frl/initramfs-linux-frlprobe.img"
+        _pkgbase="linux-frlprobe"
+    fi
     if [[ -z "$_pkgbase" || ! -f "$_img" ]]; then
         warn "cannot locate the initramfs for $(uname -r) -- skipping the amdgpu-in-initramfs check"
     elif lsinitcpio "$_img" 2>/dev/null | grep -q 'amdgpu\.ko'; then
