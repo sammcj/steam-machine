@@ -57,17 +57,17 @@ Priorities below are (H)igh, (M)edium, (L)ow.
 
 `amdgpu` whitelists DP-to-HDMI converters by branch device ID. `freesync_pcon_allow_all=1` bypasses that, and the bypass worked - the UGREEN identified as `branch_dev_id : 2818800` (`0x2B02F0`). But VRR stayed `incapable` / `vrr_range 0-0` anyway: the converter doesn't pass FreeSync through to the TV, so the whitelist was never the constraint.
 
-A vertical seam also appeared at 4K120 in that session and was twice blamed on this - first on the parameter, then on ODM combine. **Both were wrong**: ODM 2:1 is active regardless (it's the only way 1188 MHz runs here) and the seam is now gone anyway. Cause unresolved, not recurring; the session's X11-vs-Wayland state was never recorded, which is the likely confound. Full retraction in [hardware/display/](hardware/display/README.md).
+A vertical seam also appeared at 4K120 in that session. Neither the parameter nor ODM combine causes it: ODM 2:1 is active regardless (it's the only way 1188 MHz runs on the converter path) and the seam went away with ODM still on. Cause unresolved, not recurring; the session's X11-vs-Wayland state was never recorded, which is the likely confound. Detail in [hardware/display/](hardware/display/README.md).
 
 Dropped to (L): it would need a different converter, or upstream FRL on a 7.2+ kernel.
 
-**Update 2026-08-06: the converter is no longer in the chain**, so this entry is now history - 4K120 runs over the native HDMI port on a 7.2-rc6 build with FRL. VRR did not work on 7.2-rc6 either, for a different reason: 7.2 shipped FRL *without* HDMI VRR, deliberately (`vrr_range Min: 0 Max: 0`, `vrr_capable 0`). **Resolved later the same day.** Fangzhi Zuo at AMD posted a 4-patch series on 30 July 2026 adding VRR over the FRL path, Reviewed-by Harry Wentland. Unmerged, but hand-ported onto the 7.2-rc6 build and now running: `vrr_range Min: 40 Max: 120`, `vrr_capable 1`. The patches are in [hardware/kernel/patches/](hardware/kernel/patches/). See [hardware/kernel/](hardware/kernel/README.md).
+**Update 2026-08-06: the converter is no longer in the chain**, so this entry is now history - 4K120 runs over the native HDMI port on a 7.2-rc6 build with FRL, and **VRR works**. Stock 7.2 shipped FRL *without* HDMI VRR, deliberately; Fangzhi Zuo at AMD posted a 4-patch series on 30 July 2026 adding it over the FRL path, Reviewed-by Harry Wentland. Unmerged, but hand-ported onto the 7.2-rc6 build and now running: `vrr_range Min: 40 Max: 120`, `vrr_capable 1`. The patches are in [hardware/kernel/patches/](hardware/kernel/patches/). See [hardware/kernel/](hardware/kernel/README.md).
 
 #### HDMI CEC (M)
 
 Does not work, and moving to the native HDMI port did **not** fix it. The `cec` module is loaded and referenced by `drm_display_helper` and `amdgpu`, but no CEC adapter is registered and there is no `/dev/cec*`. amdgpu has never exposed one for its own HDMI ports - the `cec` dependency comes from the DisplayPort CEC-tunnelling path, which needs a DP branch device. The `hdmi_cec_state` debugfs entry reporting `HDMI-CEC status: 1` is the *sink's* advertised capability read over DDC, not a Linux adapter. A USB CEC adapter (Pulse-Eight, ~$60 AUD) is the only thing that works today. See [hardware/kernel/](hardware/kernel/README.md).
 
-**Two corrections, both on 2026-08-02.** The seam was first blamed on the parameter, then on ODM combine. Neither holds:
+**Neither the parameter nor ODM combine causes it** (both measured 2026-08-02):
 
 1. *Not the parameter.* With `freesync_pcon_allow_all=0` live, the display still runs **ODM 2:1 combine** - 4K120 needs a ~1.19 GHz pixel clock, more than one DCN pipe can clock out, so ODM is mandatory for the mode and turning FreeSync off could never have removed it. FreeSync is confirmed not forced on (parameter `0`, sink `vrr_range Min 0 Max 0`).
 2. *Not ODM either.* After the next reboot ODM 2:1 is **still** active and the seam is **gone**. So ODM is necessary for 4K120 but not sufficient to cause the artefact.
@@ -211,17 +211,17 @@ strings amdgpu.ko | grep -i frl
 
 Status as of August 2026:
 
-- FRL **merged for Linux 7.2**, in rc now, stable expected late August 2026. It is **off by default** because VRR-over-FRL did not land with it. DSC-over-FRL *did* merge, contrary to earlier notes here.
+- FRL **merged for Linux 7.2**, in rc now, stable expected late August 2026. It is **off by default** because VRR-over-FRL did not land with it. DSC-over-FRL *did* merge.
 - The enabling parameter is widely misquoted online as `amdgpu.dc_feature_mask=0x400`. **Both parts are wrong**: it is spelled `dcfeaturemask`, and it *replaces* the mask rather than OR-ing into it - on this machine the live value is `2`, so it would need `0x402`.
 - Valve has backported the ALLM/HDMI-VRR half (`allm_mode`, `hdmi_vrr_desktop_mode` both exist here) but **not** FRL. SteamOS 3.8 is on 6.16.
 - The out-of-tree work preceding the merge was tested on DCN 4.0.1 - Navi 48, this exact GPU. RDNA4 is the best-tested path.
 
 Until SteamOS rebases onto 7.2+:
 
-- The **active DP-to-HDMI 2.1 converter is the correct fix**, now confirmed in practice. The GPU emits plain DisplayPort, which has no HDMI Forum entanglement. DSC is required, not marketing: 4K120 RGB 10-bit needs ~35.6 Gbps uncompressed against HBR3's ~25.9 Gbps effective; the link negotiated 16 bpp DSC, which is ~19 Gbps. (An earlier estimate here said ~12 Gbps - the measured figure is 16 bpp.) A **passive** DP++ adapter would land back at 4K60.
+- The **active DP-to-HDMI 2.1 converter is the correct fix**, now confirmed in practice. The GPU emits plain DisplayPort, which has no HDMI Forum entanglement. DSC is required, not marketing: 4K120 RGB 10-bit needs ~35.6 Gbps uncompressed against HBR3's ~25.9 Gbps effective; the link negotiated 16 bpp DSC, which is ~19 Gbps. A **passive** DP++ adapter would land back at 4K60.
 - `amdgpu.freesync_pcon_allow_all=1` looks like the fix for VRR through a converter, and **does nothing useful on this hardware** - the adapter doesn't pass FreeSync through regardless, so VRR stays `incapable`. Pinned explicitly to `0`.
 - **Desktop mode is X11 or Wayland depending on how you enter it**, and X11 has no colour management - wide-gamut content goes to the OLED unmanaged and looks badly over-saturated, with HDR/WCG/ICC controls missing from KDE entirely. Steam's Power → Switch to Desktop hardcodes X11; booting into desktop mode gives Wayland. `steamos-session-select plasma-wayland` fixes it for the current session.
-- **4:2:0 does _not_ work out of the box**, contrary to earlier notes here. The C9's YCbCr 4:2:0 Capability Map lists only 4K60/50, so the driver prunes 4K120 outright. It takes a one-byte EDID patch (ext block byte 93, `0x33`→`0x3f`) *plus* `force_yuv420_output=1`. That combination was measured working and stable, but is 4:2:0 8-bit only - no headroom for 10-bit at 594 MHz - so text is soft and HDR bands. Rejected.
+- **4:2:0 does _not_ work out of the box.** The C9's YCbCr 4:2:0 Capability Map lists only 4K60/50, so the driver prunes 4K120 outright. It takes a one-byte EDID patch (ext block byte 93, `0x33`→`0x3f`) *plus* `force_yuv420_output=1`. That combination was measured working and stable, but is 4:2:0 8-bit only - no headroom for 10-bit at 594 MHz - so text is soft and HDR bands. Rejected.
 
 ### Onboard wireless (MediaTek MT7902)
 

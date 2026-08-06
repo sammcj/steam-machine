@@ -12,13 +12,7 @@ plus **HDMI VRR at 40–120 Hz** and ALLM, none of which the converter could do.
 
 Everything below this line is the converter-era record. It is kept because it
 holds measurements that are still true about *that* hardware, and because the
-converter remains the fallback if the FRL kernel ever has to be rolled back. Two
-conclusions in it are now **retracted**:
-
-- "This is a **better** result than native HDMI 2.1 FRL would have given" — it is
-  not. That was measured against the 4:2:0 workaround, not against real FRL.
-- The vertical seam was never separated from the converter. It has not been seen
-  once on the native path.
+converter remains the fallback if the FRL kernel ever has to be rolled back.
 
 ### Converter-era status (historical)
 
@@ -39,11 +33,9 @@ DSC is doing real work, not decoration. 4K120 RGB 10-bit is ~35.6 Gbps
 uncompressed against HBR3's ~25.9 Gbps effective (8b/10b), so it does not fit;
 at 16 bpp it lands around 19 Gbps, comfortably inside.
 
-~~This is a **better** result than native HDMI 2.1 FRL would have given~~ —
-**retracted 2026-08-06.** It is better than the *4:2:0 workaround* below, which
-is what it was actually compared against: DP + DSC delivers full 4:4:4 10-bit
-where 4:2:0 managed 8-bit with quarter-resolution chroma. Against real FRL it
-loses on every axis — FRL is 12 bpc with no compression at all.
+This beats the 4:2:0 workaround below — DP + DSC delivers full 4:4:4 10-bit
+where 4:2:0 managed 8-bit with quarter-resolution chroma. It loses to native
+FRL on every axis: FRL is 12 bpc with no compression at all.
 
 ### VRR does not work through this converter — tested, reverted
 
@@ -71,19 +63,17 @@ does not pass FreeSync through to the TV. Nothing was gained.
 
 That alone is reason enough to leave it off.
 
+Keep the parameter at `0` because it delivers no VRR — **not** because it causes
+the vertical seam described below. It does not.
+
+#### The parameter does not cause the seam, and neither does ODM combine
+
 A **vertical glitching seam down the centre of the screen** also appeared at
-4K120 during that session, and this section originally blamed the parameter for
-it — the driver had gone from one 3840-wide pipe to two ~1922-wide ODM-combine
-pipes stitched at x=1920, exactly where the artefact was, so adaptive-sync
-changing DML's budgeting looked like the cause.
+4K120 during that session. Two things were ruled out by measurement, in this
+order:
 
-**That was wrong, twice over.** See the corrections below. Keep the parameter at
-`0` because it delivers no VRR, not because it was shown to cause a seam.
-
-#### Correction (2026-08-02, later the same day): ODM combine is on regardless
-
-A seam was noticed again and the parameter was the obvious suspect. It is not
-the cause. Re-measured with `freesync_pcon_allow_all=0` confirmed live:
+**Not the parameter.** Re-measured with `freesync_pcon_allow_all=0` confirmed
+live, ODM 2:1 is still on:
 
 ```
 $ sudo ./install.sh --status
@@ -98,28 +88,19 @@ pipe topology:
   underflow                0 (clean)
 ```
 
-So **ODM 2:1 is active with the parameter off**, and the table above is not the
-whole story — whatever the single-pipe reading was, it is not what this
-configuration settles into.
+The arithmetic says the same thing: pixel clock is `htot 4399 × vtot 2249 ×
+120 Hz ≈ 1.19 GHz`, well past what one DCN pipe clocks out on this path, so
+ODM 2:1 is the only way 4K120 runs here at all — not a choice DML makes
+differently depending on adaptive-sync. Turning the FreeSync parameter off could
+never have removed it.
 
-That fits the arithmetic better than the original theory did. The mode's pixel
-clock is `htot 4399 × vtot 2249 × 120 Hz ≈ 1.19 GHz`, well past what one DCN
-pipe clocks out, so ODM 2:1 is not a choice DML makes differently depending on
-adaptive-sync — it is the only way 4K120 runs at all here. Turning the FreeSync
-parameter off could never have removed it.
+Also settled by that reading: FreeSync is not being forced on and cannot be
+(parameter `0` in `modprobe.d` and `0` live, sink reports `Min: 0 Max: 0`, so
+there is no range to engage over), and `underflow` is `0`, so it was never
+bandwidth.
 
-What follows from that:
-
-- **FreeSync is not being forced on, and cannot be.** The parameter is `0` in
-  `modprobe.d` and `0` live; the sink reports `Min: 0 Max: 0`, so there is no
-  range for VRR to engage over even if something asked for it.
-- `underflow` is `0`, so it was never bandwidth.
-
-#### Second correction: ODM is not the cause either — the seam is gone
-
-The correction above concluded "the seam is an ODM artefact", i.e. the price of
-keeping 4K120. **Also wrong.** After the next reboot, with
-`freesync_pcon_allow_all=0`, ODM 2:1 is still active —
+**Not ODM either.** After the next reboot, with `freesync_pcon_allow_all=0`,
+ODM 2:1 is still active —
 
 ```
 [ 0]: 1920 x 2160
@@ -127,15 +108,14 @@ keeping 4K120. **Also wrong.** After the next reboot, with
 ```
 
 — and the seam is **gone**, confirmed by eye. ODM combine is therefore necessary
-for 4K120 (the arithmetic above holds) but **not sufficient** to produce the
-artefact, so it cannot be the explanation on its own.
+for 4K120 on this path but **not sufficient** to produce the artefact, so it
+cannot be the explanation on its own.
 
 ### Where the artefact actually is — x≈960, not the centre (2026-08-03, evening)
 
-**Every earlier entry in this file, including the "properly measured" one below,
-aimed at the wrong place.** They all assumed a seam at the ODM stitch point,
-x=1920, because that is where a pipe-split artefact would be. Described
-first-hand, it is not there:
+The artefact is **not at the ODM stitch point**, x=1920, which is where a
+pipe-split artefact would be and where everything above assumed it was.
+Described first-hand:
 
 - it sits roughly a **quarter** of the way across — **x≈960**, not 1920;
 - it is **not a continuous straight line**, but appears in segments down that
@@ -266,8 +246,7 @@ that splits the frame, absent in the one that does not.
 **But ODM still is not the cause.** 4K120 — and therefore ODM 2:1 — ran
 seam-free for two days before the reboot that brought this back. Same mode, same
 pipe split, same DSC settings, no seam. ODM is *necessary* for the artefact and
-not *sufficient*, which is exactly what the second correction said, and this
-time there is a table behind it.
+not *sufficient*, and this time there is a table behind it.
 
 What that leaves: an **intermittent state latched at boot**, somewhere below the
 mode-setting layer, that makes the ODM path glitch. It survives modesets, a
@@ -281,9 +260,9 @@ Two candidates, not yet separated:
 
 #### A reboot does *not* clear it (2026-08-03, later)
 
-The 2026-08-02 note said the seam went away "after the next reboot", and that
-was taken as meaning a reboot resets whatever is wrong. **It does not.** A
-reboot was done with the seam visible and it came back identically.
+A reboot does not reset whatever is wrong: one was done with the seam visible
+and it came back identically. (The seam *did* go away across a reboot on
+2026-08-02, but that was coincidence, not cause.)
 
 Captured either side of that reboot, every field amdgpu reports is the same:
 
@@ -393,18 +372,16 @@ out was the relevant one. **Run it before changing anything**, because every
 wrong theory in this file came from changing one thing and eyeballing the
 result.
 
-(`odm_combine_segments` in debugfs returns `-95` on this kernel — an error code,
-not a reading. Careful with the columns by hand: the OTG section labels rows
-`[0]:` and the HUBP section `[ 0]:`, and that one space shifts every awk field —
-it has now produced three wrong readings in this repo.)
+Two traps when reading the DTN log:
 
-**Correction (2026-08-06): counting HUBPs does not give you the ODM factor.**
-`--status` used to infer "ODM N:1" from the number of active HUBP rows, which
-was only ever right by accident on the converter path. A compositor scanning out
-several planes — game, overlay, cursor — lights several HUBPs with no ODM at
-all, and that is what happens now: three active HUBPs, `ODM Segments 0`, one
-pipe. The authoritative number is the **HPO block's own `ODM Segments` column**,
-which `--status` now reads directly.
+- `odm_combine_segments` in debugfs returns `-95` on this kernel — an error code,
+  not a reading. The **HPO block's own `ODM Segments` column** is the
+  authoritative number, and `--status` reads it directly. Counting active HUBP
+  rows does *not* give you the ODM factor: a compositor scanning out several
+  planes (game, overlay, cursor) lights several HUBPs with no ODM at all, which
+  is exactly the native-FRL case — three active HUBPs, `ODM Segments 0`, one pipe.
+- The OTG section labels rows `[0]:` and the HUBP section `[ 0]:`. That one space
+  shifts every awk field, and it has produced three wrong readings in this repo.
 
 ## Desktop mode lands on X11 or Wayland depending on how you get there
 
