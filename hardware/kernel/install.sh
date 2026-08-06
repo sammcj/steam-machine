@@ -247,7 +247,15 @@ do_install() {
     unlock_rootfs
     trap relock_rootfs EXIT
 
-    kernel_installed "$kver" || deploy_kernel "$kver"
+    # Unconditional, NOT `kernel_installed || deploy_kernel`. CONFIG_LOCALVERSION
+    # is unchanged across rebuilds, so a new build has the same release string as
+    # the old one and kernel_installed() -- which only tests for existence --
+    # would report the stale files as fine. The documented rebuild flow (--cache
+    # then --install) would then boot the OLD vmlinuz against the NEW modules:
+    # same vermagic, so modprobe raises nothing, and the structures disagree.
+    # That entry is the default, so the failure lands on an unattended boot.
+    # Extracting ~180 MB again is cheap next to that.
+    deploy_kernel "$kver"
     install_preset_file
     regen_initramfs "$kver"
     install_grub_entry
@@ -273,6 +281,11 @@ do_boot() {
     kernel_installed "$kver" || need=1
     [[ -f $PRESET_DEST ]] || need=1
     [[ -f "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" ]] || need=1
+    # The fallback image too. custom.cfg has a menuentry pointing at it, and the
+    # entire point of that entry is being reachable when the default image is the
+    # thing that is broken -- so a missing fallback is exactly the case where
+    # nothing else will save you.
+    [[ -f "$BOOT_SUBDIR/initramfs-linux-frlprobe-fallback.img" ]] || need=1
     custom_cfg_installed "$efi/custom.cfg" || need=1
     [[ -f $SERVICE_DEST ]] || need=1
     [[ -f $KEEP_DEST ]] || need=1
@@ -288,7 +301,10 @@ do_boot() {
 
     kernel_installed "$kver" || deploy_kernel "$kver"
     install_preset_file
-    [[ -f "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" ]] || regen_initramfs "$kver"
+    if [[ ! -f "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" \
+       || ! -f "$BOOT_SUBDIR/initramfs-linux-frlprobe-fallback.img" ]]; then
+        regen_initramfs "$kver"
+    fi
     install_grub_entry
     install_service
     log "restored -- '$MENU_ID' will be the default at the next boot"

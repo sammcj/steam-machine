@@ -14,9 +14,12 @@ ExecStart=/home/deck/git/steam-machine/hardware/kernel/install.sh --boot
 # Restoring ~180 MB of modules and running mkinitcpio twice takes a while on a
 # cold cache; the default 90s is not enough.
 TimeoutStartSec=600
-# A failure here must never block boot -- the machine is on the stock Valve
-# kernel at this point and stays perfectly usable without the FRL one.
-SuccessExitStatus=0 1
+# No SuccessExitStatus override. A failing oneshot wanted by multi-user.target
+# does not block boot on its own -- the machine is on the stock Valve kernel at
+# this point and stays usable without the FRL one -- so mapping install.sh's
+# exit 1 onto success bought nothing and cost the only signal there is: the
+# README tells you to check `systemctl status` when the repair did not happen,
+# and with the override that check was green even on a full-rootfs failure.
 
 [Install]
 WantedBy=multi-user.target

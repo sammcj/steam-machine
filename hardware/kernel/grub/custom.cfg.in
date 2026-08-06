@@ -28,7 +28,7 @@ menuentry 'SteamOS -- 4K120 HDMI (mainline kernel, HDMI 2.1 FRL)' --class steamo
 	insmod part_gpt
 	insmod btrfs
 	search --no-floppy --fs-uuid --set=root @UUID@
-	steamenv_boot	linux /boot/frl/vmlinuz-linux-frlprobe console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no acpi_enforce_resources=lax log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 amdgpu.dcdebugmask=0x20000 amdgpu.dcfeaturemask=0x402 audit=0 fsck.mode=auto fsck.repair=preen
+	steamenv_boot	linux /boot/frl/vmlinuz-linux-frlprobe console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no acpi_enforce_resources=lax log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 amdgpu.sched_hw_submission=4 amdgpu.dcdebugmask=0x20000 amdgpu.dcfeaturemask=0x402 audit=0 fsck.mode=auto fsck.repair=preen
 	initrd	/boot/amd-ucode.img /boot/frl/initramfs-linux-frlprobe.img
 }
 
@@ -43,7 +43,7 @@ menuentry 'SteamOS -- 4K120 HDMI (mainline kernel, fallback initramfs)' --class 
 	insmod part_gpt
 	insmod btrfs
 	search --no-floppy --fs-uuid --set=root @UUID@
-	steamenv_boot	linux /boot/frl/vmlinuz-linux-frlprobe console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no acpi_enforce_resources=lax log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 amdgpu.dcdebugmask=0x20000 amdgpu.dcfeaturemask=0x402 audit=0 fsck.mode=auto fsck.repair=preen
+	steamenv_boot	linux /boot/frl/vmlinuz-linux-frlprobe console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no acpi_enforce_resources=lax log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 amdgpu.sched_hw_submission=4 amdgpu.dcdebugmask=0x20000 amdgpu.dcfeaturemask=0x402 audit=0 fsck.mode=auto fsck.repair=preen
 	initrd	/boot/amd-ucode.img /boot/frl/initramfs-linux-frlprobe-fallback.img
 }
 
@@ -60,6 +60,12 @@ menuentry 'SteamOS -- 4K120 HDMI (mainline kernel, fallback initramfs)' --class 
 # DC_FRL_MASK is (1 << 10) = 0x400, and dcfeaturemask REPLACES rather than ORs,
 # so the driver default DC_MULTI_MON_PP_MCLK_SWITCH_MASK (0x2) has to be carried
 # explicitly: 0x400 | 0x2 = 0x402.
+#
+# The rest of the command line is Valve's stock one, minus ttm.pages_min=2097152:
+# that is a Valve-only ttm parameter, and mainline logs
+# `ttm: unknown parameter 'pages_min' ignored` for it. Harmless either way, but
+# an ignored parameter in a boot line is a trap for whoever debugs this next.
+# Check `dmesg | grep 'unknown parameter'` after any future rebase.
 if [ -z "${boot_once}" ]; then
   set default="@MENU_ID@"
 fi

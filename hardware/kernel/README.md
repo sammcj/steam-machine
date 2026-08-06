@@ -485,12 +485,22 @@ sudo grep -A3 '^DSC:' /sys/kernel/debug/dri/0/amdgpu_dm_dtn_log
 # HDR: 0 = SDR desktop, 9 = BT2020_RGB
 sudo drm_info | grep -A1 Colorspace
 
-# the gaps
-sudo cat /sys/kernel/debug/dri/0/HDMI-A-1/vrr_range      # Min: 0 Max: 0
+# VRR range the sink advertises, and whether the driver accepted it
+sudo cat /sys/kernel/debug/dri/0/HDMI-A-1/vrr_range      # Min: 40  Max: 120
+sudo drm_info | grep -A2 vrr_capable                     # value: 1
+
+# is the timing generator's dynamic vtotal armed (both *_sel must be 1)
+sudo grep -A2 '^OTG:' /sys/kernel/debug/dri/0/amdgpu_dm_dtn_log
+
+# the one remaining gap
 ls /dev/cec*                                             # none
 
-# regenerate the evidence capture
-sudo cat hardware/kernel/frl-4k120-evidence.txt
+# any parameter the kernel silently threw away
+sudo dmesg | grep 'unknown parameter'
+
+# read the evidence capture (it is a file, not a generator -- see
+# frl-4k120-evidence.txt for how it was produced)
+less hardware/kernel/frl-4k120-evidence.txt
 ```
 
 ## Warning

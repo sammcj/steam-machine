@@ -593,28 +593,28 @@ do_status() {
 
     echo
     echo "live amdgpu parameters:"
-    printf '  %-26s %s\n' "freesync_pcon_allow_all" "$(param freesync_pcon_allow_all)"
-    printf '  %-26s %s\n' "deep_color"              "$(param deep_color)"
-    printf '  %-26s %s\n' "dcfeaturemask"           "$(param dcfeaturemask)"
+    printf '  %-26s %s\n' "deep_color"    "$(param deep_color)"
+    printf '  %-26s %s\n' "dcfeaturemask" "$(param dcfeaturemask)"
 
-    # Compare the live value against whatever the repo config actually asks for,
-    # rather than assuming a particular value is the desired one -- that setting
-    # has been flipped once already (see modprobe.d/amdgpu-display.conf).
-    #
-    # freesync_pcon_allow_all is a Valve-only parameter: it does not exist in
-    # mainline, so the FRL kernel logs "unknown parameter ... ignored" and
-    # /sys/module/amdgpu/parameters/ has no such file. That is expected and not a
-    # fault -- the parameter only ever gated VRR through the DP->HDMI converter's
-    # PCON, and the converter is out of the chain. Don't warn about it there.
-    local want
-    want="$(sed -n 's/^options amdgpu .*freesync_pcon_allow_all=\([0-9]\+\).*/\1/p' \
-        "$MODPROBE_SRC" | head -1)"
-    if [[ ! -e /sys/module/amdgpu/parameters/freesync_pcon_allow_all ]]; then
-        printf '  %-26s %s\n' "" "(not in this kernel -- Valve-only, PCON path only; harmless)"
-    elif [[ -n "$want" && "$(param freesync_pcon_allow_all)" != "$want" ]]; then
-        echo
-        warn "config wants freesync_pcon_allow_all=$want but live value is $(param freesync_pcon_allow_all) -- reboot required"
-    fi
+    # Every `options amdgpu` line the repo config asks for, checked against the
+    # live value rather than against a value hardcoded here -- these have been
+    # flipped before. modprobe.d/amdgpu-display.conf currently sets nothing, so
+    # this loop is a no-op; it exists so that re-adding a line there is enough,
+    # with no second edit needed here.
+    local line k v
+    while read -r line; do
+        for kv in $line; do
+            [[ $kv == *=* ]] || continue
+            k="${kv%%=*}"; v="${kv#*=}"
+            if [[ ! -e "/sys/module/amdgpu/parameters/$k" ]]; then
+                echo
+                warn "config sets amdgpu.$k, which this kernel does not have -- it is being ignored"
+            elif [[ "$(param "$k")" != "$v" ]]; then
+                echo
+                warn "config wants $k=$v but live value is $(param "$k") -- reboot required"
+            fi
+        done
+    done < <(sed -n 's/^options amdgpu //p' "$MODPROBE_SRC")
 
     echo
     echo "connectors:"
