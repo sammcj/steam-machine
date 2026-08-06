@@ -407,14 +407,25 @@ do_pipeline() {
         echo "  (no active pipes)"
     else
         printf '%s\n' "$active"
-        local n; n="$(grep -c . <<<"$active")"
-        if [[ "$n" -ge 2 ]]; then
-            # NOT "so that is the seam": ODM 2:1 is on for every 4K mode above
-            # 60 Hz and ran seam-free for two days straight. It is necessary for
-            # the artefact but demonstrably not sufficient. See README.
-            printf '  %-24s %s\n' "=>" "ODM ${n}:1 combine (normal at 4K100/120 -- required, and not the seam on its own)"
+        # Counting active HUBPs does NOT tell you the ODM factor. A compositor
+        # scanning out several planes (game + overlay + cursor) lights several
+        # HUBPs with no ODM at all -- which is exactly what happens here now that
+        # native FRL drives 4K120 on one pipe. The authoritative number is the
+        # OTG/HPO block's own "ODM Segments" column; read that instead of guessing.
+        local odm
+        # HPO row is "[0]:  <otg> <link> <fmt> <depth> <odm> <lanes> <borrow> ...".
+        # Unlike the HUBP rows the label has no space inside the brackets, so the
+        # columns are NOT shifted: ODM Segments is $6, Lanes is $7.
+        odm="$(sed -n '/^HPO: /{n;p;q}' <<<"$dtn" | awk '{print $6}')"
+        if [[ "$odm" =~ ^[0-9]+$ ]] && (( odm >= 2 )); then
+            # NOT "so that is the seam": ODM combine is necessary for the artefact
+            # but demonstrably not sufficient -- it ran seam-free for two days
+            # straight with ODM on. See README.
+            printf '  %-24s %s\n' "=>" "ODM ${odm}:1 combine (reported by the OTG, not inferred)"
+        elif [[ "$odm" =~ ^[0-9]+$ ]]; then
+            printf '  %-24s %s\n' "=>" "no ODM combine ($(grep -c . <<<"$active") planes, single pipe)"
         else
-            printf '  %-24s %s\n' "=>" "single pipe, no ODM"
+            printf '  %-24s %s\n' "=>" "ODM segments not reported"
         fi
     fi
 
