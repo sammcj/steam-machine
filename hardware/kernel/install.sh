@@ -79,10 +79,14 @@ kernel_installed() {
         && [[ -d "/usr/lib/modules/$k" ]]
 }
 
+# The UUID goes into a local first. Inlining $(rootfs_uuid) would run die() in a
+# subshell, so a failure to read it would leave `grep -q ""` -- which matches
+# anything, and would declare a stale-UUID custom.cfg valid.
 custom_cfg_installed() {
-    local cfg="$1"
-    [[ -f $cfg ]] && grep -q "vmlinuz-linux-frlprobe" "$cfg" \
-        && grep -q "$(rootfs_uuid)" "$cfg"
+    local cfg="$1" uuid
+    [[ -f $cfg ]] || return 1
+    uuid="$(rootfs_uuid)"
+    grep -q "vmlinuz-linux-frlprobe" "$cfg" && grep -q "$uuid" "$cfg"
 }
 
 # --- SteamOS read-only rootfs -------------------------------------------------
@@ -147,12 +151,13 @@ deploy_kernel() {
     local kver="$1"
     log "restoring kernel $kver from cache"
     mkdir -p "$BOOT_SUBDIR"
-    tar -C / --zstd -xf "$CACHE_DIR/kernel.tar.zst" boot usr
-    # The tarball carries boot/vmlinuz-*; move it into the subdirectory so
-    # GRUB's 10_linux never sees it.
-    if [[ -f /boot/vmlinuz-linux-frlprobe ]]; then
-        mv /boot/vmlinuz-linux-frlprobe "$BOOT_SUBDIR/vmlinuz-linux-frlprobe"
-    fi
+    # --transform rewrites boot/ to boot/frl/ during extraction. An earlier
+    # version extracted to /boot/vmlinuz-* and moved it afterwards; a crash in
+    # that window left a vmlinuz in /boot proper, which 10_linux globs into
+    # grub.cfg -- with no matching initramfs, and version-sorted above the stock
+    # kernel. /boot itself is never written to now.
+    tar -C / --zstd -xf "$CACHE_DIR/kernel.tar.zst" \
+        --transform 's|^boot/|boot/frl/|' boot usr
     depmod "$kver"
 }
 
@@ -169,10 +174,25 @@ regen_initramfs() {
     log "generating initramfs for $kver"
     # mkinitcpio resolves the kernel version from the image itself, so the
     # preset's ALL_kver points at the vmlinuz in /boot/frl.
-    mkinitcpio -p linux-frlprobe 2>&1 | grep -Ei 'error|image generation successful' \
+    #
+    # Its exit status is captured rather than piped into grep. Piping and
+    # swallowing with `|| true` meant a failed run was indistinguishable from a
+    # good one, and the only check was that *an* image existed -- which a stale
+    # image from the previous kernel satisfies. That boots the default entry
+    # into an initramfs whose modules will not load.
+    local out rc=0
+    out="$(mkinitcpio -p linux-frlprobe 2>&1)" || rc=$?
+    printf '%s\n' "$out" | grep -Ei 'error|image generation successful' \
         | grep -v 'steamdeck\|blake2b_generic' || true
+    if [[ $rc -ne 0 ]]; then
+        printf '%s\n' "$out" >&2
+        die "mkinitcpio failed (exit $rc)"
+    fi
     [[ -f "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" ]] \
         || die "mkinitcpio produced no initramfs"
+    # Guards against a stale image surviving a newer kernel being deployed.
+    [[ "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" -nt "$BOOT_SUBDIR/vmlinuz-linux-frlprobe" ]] \
+        || warn "initramfs is older than the kernel image -- regeneration may not have run"
 }
 
 install_grub_entry() {
@@ -272,10 +292,21 @@ do_status() {
     echo "initramfs installed: $( [[ -f "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" ]] && echo yes || echo NO)"
     echo "modules installed  : $( [[ -n ${kver:-} && -d "/usr/lib/modules/$kver" ]] && echo yes || echo NO)"
     echo "mkinitcpio preset  : $( [[ -f $PRESET_DEST ]] && echo yes || echo NO)"
-    echo "grub custom.cfg    : $( [[ -f "$efi/custom.cfg" ]] && echo "yes ($efi/custom.cfg)" || echo NO)"
+    # Checks the UUID too, not just existence: a custom.cfg left over from the
+    # other A/B slot points `search --fs-uuid` at a filesystem that is not there.
+    echo "grub custom.cfg    : $( custom_cfg_installed "$efi/custom.cfg" 2>/dev/null \
+        && echo "yes ($efi/custom.cfg)" \
+        || { [[ -f "$efi/custom.cfg" ]] && echo 'STALE -- wrong UUID or no kernel line' || echo NO; })"
     echo "boot service       : $(systemctl is-enabled steam-machine-kernel.service 2>/dev/null || echo NO)"
-    echo "grub.cfg is stock  : $( grep -q 'vmlinuz-linux-frlprobe' "$efi/grub.cfg" 2>/dev/null \
-        && echo 'NO -- FRL kernel leaked into it' || echo yes)"
+    # An unreadable grub.cfg must not read as "stock": grep fails the same way
+    # for "no match" and "cannot open the file".
+    if [[ ! -r "$efi/grub.cfg" ]]; then
+        echo "grub.cfg is stock  : ? -- cannot read $efi/grub.cfg (run as root)"
+    elif grep -q 'vmlinuz-linux-frlprobe' "$efi/grub.cfg"; then
+        echo "grub.cfg is stock  : NO -- FRL kernel leaked into it"
+    else
+        echo "grub.cfg is stock  : yes"
+    fi
 
     if [[ $(uname -r) == "${kver:-}" ]]; then
         echo
@@ -299,22 +330,30 @@ do_uninstall() {
     unlock_rootfs
     trap relock_rootfs EXIT
 
+    # Order matters, and it is the reverse of install: the boot entry goes
+    # first, the payload it points at second. Removing the kernel first would
+    # leave the machine's *default* entry referencing a deleted file for the
+    # rest of this function -- and efi_dir() can die() -- which is precisely the
+    # state `set fallback` exists to rescue. Do not reorder.
+    local efi kver
+    efi="$(efi_dir)"
+
+    # Stock GRUB behaviour is restored the moment custom.cfg is gone: grub.cfg
+    # was never modified, so there is nothing to regenerate. Checked before
+    # anything is deleted.
+    grep -q 'vmlinuz-linux-neptune' "$efi/grub.cfg" \
+        || die "stock kernel absent from grub.cfg -- refusing to uninstall; investigate"
+
+    rm -f "$efi/custom.cfg"
+    sync
+
     systemctl disable --now steam-machine-kernel.service >/dev/null 2>&1 || true
     rm -f "$SERVICE_DEST" "$KEEP_DEST" "$PRESET_DEST"
     systemctl daemon-reload
 
-    local kver efi
     kver="$(cached_kver)" || true
     [[ -n ${kver:-} ]] && rm -rf "/usr/lib/modules/$kver"
     rm -rf "$BOOT_SUBDIR"
-
-    efi="$(efi_dir)"
-    rm -f "$efi/custom.cfg"
-
-    # Stock GRUB behaviour is restored the moment custom.cfg is gone: grub.cfg
-    # was never modified, so there is nothing to regenerate.
-    grep -q 'vmlinuz-linux-neptune' "$efi/grub.cfg" \
-        || die "stock kernel absent from grub.cfg -- do NOT reboot; investigate"
 
     log "removed. The cache at $CACHE_DIR is kept -- delete it manually to reclaim space."
 }
@@ -325,6 +364,6 @@ case "${1:---install}" in
     --cache)      build_cache ;;
     --status)     do_status ;;
     --uninstall)  do_uninstall ;;
-    -h|--help)    sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;
+    -h|--help)    sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;
     *)            die "unknown option: $1 (try --help)" ;;
 esac

@@ -2,13 +2,13 @@
 
 Draft comment for <https://github.com/ValveSoftware/SteamOS/issues/2698> - "SteamOS doesn't support 4k 120hz via HDMI (AMD Radeon RX 9070 XT)".
 
-Paste the section between the rules as a comment.
-
 ---
 
 Follow-up: I've got this working on a hand-built kernel, so here are the specifics in case they're useful.
 
-FRL for DCN 4.0.1 landed in the 7.2 merge window. SteamOS 3.8.24 ships `linux-neptune-616-drm-exec` 6.16.12, so the code isn't present. I checked rather than assumed - `amdgpu.ko` from `linux-neptune-616-drm-exec` 6.16.12, `linux-neptune-618-drm-exec` 6.18.33 and `linux-neptune-618` 6.18.38 all have a byte-identical FRL symbol set, and none contain `dcn401_hpo_frl_stream_encoder`, `link_hdmi_frl` or `link_hwss_hpo_frl`. The `*frl*` symbols present in all three belong to the DP-to-HDMI PCON path, which is why a DP→HDMI 2.1 converter works today and the native port doesn't.
+FRL for DCN 4.0.1 landed in the 7.2 merge window. SteamOS 3.8.24 ships `linux-neptune-616-drm-exec` 6.16.12, so the code isn't present.
+
+`amdgpu.ko` from `linux-neptune-616-drm-exec` 6.16.12, `linux-neptune-618-drm-exec` 6.18.33 and `linux-neptune-618` 6.18.38 all have a byte-identical FRL symbol set, and none contain `dcn401_hpo_frl_stream_encoder`, `link_hdmi_frl` or `link_hwss_hpo_frl`. The `*frl*` symbols present in all three belong to the DP-to-HDMI PCON path, which is why a DP→HDMI 2.1 converter works today and the native port doesn't.
 
 On mainline `v7.2-rc6` with `amdgpu.dcfeaturemask=0x402`, RX 9070 XT (Navi 48, `1002:7550`) → LG C9 over the native HDMI port:
 
@@ -68,10 +68,3 @@ Method, config, raw debugfs captures and the install scripts: <https://github.co
 
 Happy to run tests on this hardware if that's useful.
 
----
-
-## Notes before posting
-
-- Check the repo URL resolves and that `frl-4k120-evidence.txt` is pushed before linking it.
-- No serials, account IDs, addresses or private hostnames appear above - keep it that way if you edit it.
-- If they ask for a full `dmesg`, capture it on the FRL kernel with `drm.debug=0x1e` and attach as a file rather than pasting inline.
