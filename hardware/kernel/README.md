@@ -489,4 +489,13 @@ sudo cat hardware/kernel/frl-4k120-evidence.txt
 
 ## Warning
 
-The TV is this machine's only console. Before rebooting into any newly built kernel, confirm the generated `/efi/EFI/steamos/grub.cfg` still lists the stock kernel and that `set default=` names it. See the same warning in [hardware/display/](../display/README.md).
+**This is not a supported configuration and comes with no warranty of any kind.** It replaces the kernel and adds a bootloader config on a device Valve ship as an appliance. It has worked reliably here since 2026-08-06, on one machine, with one GPU and one TV. If it breaks yours, you keep both pieces.
+
+Specifically, be aware that:
+
+- **The VRR patches are unmerged.** `0002`-`0005` are a public mailing-list posting, reviewed but not accepted, hand-ported to a tree they were not written against. They may change or be rejected upstream.
+- **7.2-rc6 is a release candidate.** It gets no stable or CVE fixes. Rebuild at 7.2 final.
+- **You lose Valve's kernel patches** while running it. See [the gap](#the-probe-kernel-is-mainline-so-valves-patches-are-gone-m) for what that costs on a desktop.
+- **A SteamOS update leaves you on the stock kernel for one boot.** Expected, not a fault - see [After a SteamOS update](#after-a-steamos-update).
+
+The design assumes the display is the machine's only console, so a failed modeset would otherwise be a lockout. Three things make that survivable, and `install.sh` sets all of them up: `grub.cfg` is never modified, the whole FRL boot path is one file that GRUB simply skips if absent, and `set fallback` boots the stock Valve kernel automatically if the FRL entry cannot load. Before rebooting into any newly built kernel, confirm `sudo ./install.sh --status` reports `grub.cfg is stock : yes`. See the same warning in [hardware/display/](../display/README.md).
