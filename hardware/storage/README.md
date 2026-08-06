@@ -3,8 +3,40 @@
 The two Crucial MX500 2 TB SATA SSDs, mirrored, mounted at `/home/deck/SATA`
 and usable as a second Steam library.
 
-**Status: mounted and surviving remount.** One manual step remains — see
-[Registering with Steam](#registering-with-steam).
+**Status: temporarily masked (2026-08-07)** while the power-off hang is being
+bisected — see [Temporarily disabled for the power-off hang](#temporarily-disabled-for-the-power-off-hang)
+below for how to put it back. Otherwise: mounted and surviving remount, with one
+manual step remaining — see [Registering with Steam](#registering-with-steam).
+
+## Temporarily disabled for the power-off hang
+
+The array is unmounted and its generated mount unit is masked:
+
+```bash
+sudo systemctl mask home-deck-SATA.mount     # /etc/systemd/system/home-deck-SATA.mount -> /dev/null
+sudo umount /home/deck/SATA
+```
+
+To restore:
+
+```bash
+sudo systemctl unmask home-deck-SATA.mount
+sudo systemctl daemon-reload
+sudo mount /home/deck/SATA
+```
+
+Masking rather than editing `/etc/fstab` is deliberate: `install.sh --boot`
+re-adds the fstab entry every boot, so a commented-out line would come back. The
+mask outranks the generator and needs no change to this subsystem. It also
+persists correctly — `/etc/systemd/system/*.mount` is on the SteamOS keep list,
+so the mask survives an A/B update as well as a reboot.
+
+**Note that the evidence is against this array being the cause.** It has been in
+`/etc/fstab` since 2026-08-03, so it was mounted during the two *successful*
+power-offs on 2026-08-06 (17:39 and 17:59) as well as during both hangs. It also
+holds 160 KiB — the array is effectively empty, so there is nothing to flush.
+The test costs nothing, which is the only reason to run it. See
+[hardware/kernel/](../kernel/README.md) under "OPEN: power-off hangs".
 
 > **Move completed (2026-08-02).** The mount point moved from `/home/deck/Games`
 > to `/home/deck/SATA`. The subvolume (`@games` → `@SATA`) and the filesystem

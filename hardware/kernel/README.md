@@ -593,6 +593,12 @@ sudo ./install.sh --install
 
 Worth doing the **stock Valve kernel** first, though - one arrow-key up in the GRUB menu, no install step, and it establishes whether power-off works at all on this hardware and firmware. If the stock 6.16 kernel hangs too, none of the above matters and this is a board or firmware problem, not a patch problem.
 
+#### The BTRFS array is disabled while this runs (2026-08-07)
+
+The secondary BTRFS RAID1 at `/home/deck/SATA` is unmounted and its mount unit masked, to take it out of the shutdown path - see [hardware/storage/](../storage/README.md#temporarily-disabled-for-the-power-off-hang) for the commands to restore it.
+
+This is a cheap elimination rather than a real suspect. The array has been in `/etc/fstab` since 2026-08-03, so it was mounted during the two **successful** power-offs on 2026-08-06 as well as during both hangs, and it holds 160 KiB - there is nothing to flush. Both hangs also logged clean unmounts before wedging. If a hang happens with the array masked, that is settled and the mask can come off.
+
 #### Capturing the next one
 
 Power-cycling blind loses the evidence. Before the next shutdown:
