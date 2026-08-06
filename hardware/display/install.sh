@@ -45,16 +45,30 @@ UNIT_SRC="$REPO_DIR/systemd/steam-machine-display.service"
 UNIT_NAME="steam-machine-display.service"
 UNIT_DEST="/etc/systemd/system/$UNIT_NAME"
 
-# --- TV re-detect (the CH7218 converter hides the TV's power state) ----------
-# Units that must be enabled to fire on their own.
+# --- TV re-detect ------------------------------------------------------------
+# All of this existed because the CH7218 DP->HDMI converter was the DP sink: it
+# held HPD asserted and answered EDID from cache whether the TV was on or off,
+# so nothing on this side could tell that the TV had woken up. See ./README.md.
+#
+# That converter was removed on 2026-08-06 -- the TV is now on the GPU's native
+# HDMI port, which has real hot-plug detect and re-detects by itself. The
+# automatic triggers below therefore fire into a working link and achieve
+# nothing except a visible one-second blank each time. Retired 2026-08-06.
+#
+# The hotkey daemon is kept: it costs nothing while idle and is the thing you
+# reach for when the screen is already black.
 REDETECT_UNITS_ENABLED=(
-    steam-machine-display-redetect-boot.service
-    steam-machine-display-redetect-resume.service
     steam-machine-display-hotkey.service
 )
-# Installed but deliberately not enabled: udev starts it via SYSTEMD_WANTS, and
-# it has no [Install] section to enable.
-REDETECT_UNITS_TRIGGERED=(
+REDETECT_UNITS_TRIGGERED=()
+
+# Actively removed, not merely left uninstalled -- they are enabled on this
+# machine right now, and /etc/systemd/system is on the SteamOS keep list, so
+# they would otherwise survive indefinitely. The unit files stay in the repo:
+# if a future setup puts a converter back in the chain, they are the answer.
+REDETECT_UNITS_RETIRED=(
+    steam-machine-display-redetect-boot.service
+    steam-machine-display-redetect-resume.service
     steam-machine-display-redetect.service
 )
 UDEV_SRC="$REPO_DIR/udev/99-steam-machine-display-redetect.rules"
@@ -165,12 +179,59 @@ ensure_unit() {
 # shim: an A/B update deletes the udev rule outright, but a stale copy left by
 # an older revision of this repo is the case that would otherwise report as
 # installed and working while firing the wrong arguments.
+# Reports whether any retired trigger has crept back -- e.g. from an older
+# checkout, or a restored /etc. "retired" is the healthy answer.
+redetect_triggers_state() {
+    local u back=()
+    for u in "${REDETECT_UNITS_RETIRED[@]}"; do
+        [[ -f "/etc/systemd/system/$u" ]] && back+=("${u%.service}")
+    done
+    [[ -f "$UDEV_DEST" ]] && back+=("udev-rule")
+    if [[ ${#back[@]} -eq 0 ]]; then
+        echo "retired (native HDMI re-detects by itself)"
+    else
+        echo "STILL PRESENT: ${back[*]} -- run --install to remove"
+    fi
+}
+
+# Undoes the automatic re-detect triggers. Idempotent, and safe to run on a
+# machine that never had them. Kept as its own function so it also runs from
+# --boot, which is what removes them again if a restored /etc brings them back.
+retire_redetect_triggers() {
+    local u changed=0
+    for u in "${REDETECT_UNITS_RETIRED[@]}"; do
+        if systemctl is-enabled --quiet "$u" 2>/dev/null; then
+            log "disabling $u (native HDMI re-detects by itself)"
+            systemctl disable "$u" >/dev/null 2>&1 || warn "could not disable $u"
+            changed=1
+        fi
+        if [[ -f "/etc/systemd/system/$u" ]]; then
+            rm -f "/etc/systemd/system/$u"
+            changed=1
+        fi
+    done
+
+    # The udev rule fires the controller trigger. Without it the unit is inert,
+    # but leave it installed and every DualSense connect blanks the screen.
+    if [[ -f "$UDEV_DEST" ]]; then
+        log "removing $UDEV_DEST (controller-connect re-detect)"
+        rm -f "$UDEV_DEST"
+        udevadm control --reload-rules || warn "could not reload udev rules"
+        changed=1
+    fi
+
+    [[ $changed -eq 1 ]] && systemctl daemon-reload
+    return 0
+}
+
 ensure_redetect() {
     [[ -x "$REDETECT_BIN" ]] || die "missing or non-executable $REDETECT_BIN"
     [[ -x "$HOTKEY_BIN"   ]] || die "missing or non-executable $HOTKEY_BIN"
     bash -n "$REDETECT_BIN" || die "$REDETECT_BIN does not parse -- refusing to install"
     python3 -m py_compile "$HOTKEY_BIN" \
         || die "$HOTKEY_BIN does not compile -- refusing to install"
+
+    retire_redetect_triggers
 
     local u src reload=0
     for u in "${REDETECT_UNITS_ENABLED[@]}" "${REDETECT_UNITS_TRIGGERED[@]}"; do
@@ -187,12 +248,6 @@ ensure_redetect() {
     for u in "${REDETECT_UNITS_ENABLED[@]}"; do
         systemctl is-enabled --quiet "$u" 2>/dev/null || systemctl enable "$u"
     done
-
-    if [[ ! -f "$UDEV_DEST" ]] || ! cmp -s "$UDEV_SRC" "$UDEV_DEST"; then
-        log "installing $UDEV_DEST"
-        install -Dm644 "$UDEV_SRC" "$UDEV_DEST"
-        udevadm control --reload-rules || warn "could not reload udev rules"
-    fi
 
     # The hotkey is the trigger you reach for when the screen is already black,
     # so a daemon that is installed-but-dead is the one failure worth catching
@@ -489,8 +544,8 @@ do_status() {
         fi
         printf '  %-46s %s\n' "${u%.service}" "$state"
     done
-    printf '  %-46s %s\n' "udev rule (controller connect)" \
-        "$([[ -f "$UDEV_DEST" ]] && cmp -s "$UDEV_SRC" "$UDEV_DEST" && echo installed || echo "MISSING or stale")"
+    printf '  %-46s %s\n' "auto re-detect triggers" \
+        "$(redetect_triggers_state)"
     local t
     for t in controller boot resume hotkey; do
         if [[ -f "/run/steam-machine-display-redetect.$t.stamp" ]]; then
