@@ -63,7 +63,11 @@ All commands below are run from `hardware/kernel/` in this repo.
 
 **After a SteamOS update:** nothing, it repairs itself - but [read this](#after-a-steamos-update) for what to expect and how to check.
 
-## What was measured
+---
+
+## Background
+
+### What was measured
 
 |                       |                                                                             |
 | --------------------- | --------------------------------------------------------------------------- |
