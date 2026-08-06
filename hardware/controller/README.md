@@ -85,7 +85,7 @@ Each of these was checked and is *not* the cause:
 - **InputPlumber** — the service is `inactive (dead)` on this machine. Not involved. (SteamOS 3.8 ships it, and `90-steam-inputplumber.rules` only starts it when `USE_INPUTPLUMBER=1` is set on a DMI match, which does not happen here.)
 - **udev permissions** — `60-steam-input.rules` matches `ATTRS{idVendor}=="28de"` by wildcard, so `1302` and `1304` are already covered, and `70-steam-jupiter-input.rules` tags *all* hidraw nodes `uaccess` regardless. Steam can open the device; it does.
 - **The machine being mistaken for a Deck** — DMI reports `B850M FORCE WIFI6E V2` / Gigabyte. No Jupiter or Galileo, and no platform device claiming otherwise.
-- **The `-steamdeck` flag, and the session type** — this was the first theory and it is **wrong**. `/usr/bin/steam-jupiter` passes `-steamdeck` in *both* the gamescope and desktop sessions (confirmed in `bootstrap_log.txt`), and the misidentification happens in both. The fallback is in the type mapping, not the session.
+- **The `-steamdeck` flag, and the session type** — the obvious suspect, and not the cause. `/usr/bin/steam-jupiter` passes `-steamdeck` in *both* the gamescope and desktop sessions (confirmed in `bootstrap_log.txt`), and the misidentification happens in both. The fallback is in the type mapping, not the session.
 - **A stale install** — the `steamui` package was downloaded 2026-08-02 with contents dated to 2026-07-22. Individual chunk mtimes read as old (one is 2025-10-03) but those are preserved from the archive, meaning that code path simply has not been rebuilt upstream. The client build is `1785347151` (2026-07-30) and `steamos-update check` reports no update available.
 
 ### Why it cannot be fixed locally

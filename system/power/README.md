@@ -105,7 +105,7 @@ Powertop's check is `power/control != "auto"`. It is a string comparison; it doe
 
 **The audio one is simply wrong.** Powertop asks for `power_save` = `1`; it is `10`, with `power_save_controller` = `Y`. Its check compares against the literal string. The proof it is already working is in the table above: all three `snd_hda_intel` functions are suspended.
 
-**The SATA entries were the real ones**, and are now applied — see the table further up. This was a correction: an earlier version of this file claimed the MX500s were on `host4`/`host5` and that `host0`–`host3` were empty ports. That was backwards. `host0` = `sda`, `host1` = `sdb`, both at `keep_firmware_settings`; `host4`/`host5` are the empty ones that already had `med_power_with_dipm`. Verified via `/sys/class/scsi_host/host*/device/target*/*/block/*`, which `--status` now prints on every run so the mapping cannot be misremembered again.
+**The SATA entries were the real ones**, and are now applied — see the table further up. `host0` = `sda`, `host1` = `sdb`, both at `keep_firmware_settings`; `host4`/`host5` are the empty ports, already at `med_power_with_dipm`. Do not guess this mapping — it is the reverse of what the host numbering suggests, and guessing it wrong once is what made `--status` print `/sys/class/scsi_host/host*/device/target*/*/block/*` on every run.
 
 ### Rejected on risk
 
