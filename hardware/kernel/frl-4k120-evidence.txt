@@ -1,0 +1,134 @@
+======================================================================
+ HDMI 2.1 FRL @ 4K120 on Radeon RX 9070 XT (RDNA4 / DCN 4.0.1)
+ Linux 7.2-rc6 on SteamOS 3.8 -- native HDMI port, no DP converter
+ Captured: 2026-08-06 06:21:55 UTC
+======================================================================
+
+--- 1. KERNEL -------------------------------------------------------
+Linux steammachine 7.2.0-rc6-frlprobe #1 SMP PREEMPT_DYNAMIC Thu Aug  6 05:17:52 UTC 2026 x86_64 GNU/Linux
+
+amdgpu.dcfeaturemask (DC_FRL_MASK 0x400 | DC_MULTI_MON_PP_MCLK_SWITCH 0x2):
+  cmdline: amdgpu.dcfeaturemask=0x402
+  live   : 1026  (decimal; 0x402)
+
+--- 2. GPU / DISPLAY CORE -------------------------------------------
+[    7.674815] amdgpu 0000:03:00.0: [drm] Display Core v3.2.384 initialized on DCN 4.0.1
+[    8.444515] amdgpu 0000:11:00.0: [drm] Display Core v3.2.384 initialized on DCN 3.1.5
+03:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 48 [Radeon RX 9070/9070 XT/9070 GRE] [1002:7550] (rev c0)
+11:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Granite Ridge [Radeon Graphics] [1002:13c0] (rev cb)
+
+--- 3. NATIVE FRL PATH IS ACTIVE ------------------------------------
+Workqueue created only by the 7.2 native-FRL code:
+[    8.010038] workqueue: name exceeds WQ_NAME_LEN. Truncating to: hdmi_frl_status_polling_workque
+
+--- 4. CONNECTOR ----------------------------------------------------
+Connected connectors:
+  card0-HDMI-A-1: connected
+  (DP-* absent: the DP-to-HDMI 2.1 converter has been removed)
+
+--- 5. TIMING -- proves FRL, not TMDS --------------------------------
+OTG:  v_bs  v_be  v_ss  v_se  vpol  vmax  vmin  vmax_sel  vmin_sel  h_bs  h_be  h_ss  h_se  hpol  htot  vtot  underflow blank_en
+[0]:  2242    82     0    10     0     0     0         0         0  4224   384     0    88     0  4399  2249          0        0
+
+
+  htotal x vtotal x refresh = 4399 x 2249 x 120 Hz
+  => pixel clock 1187.20 MHz
+  HDMI 2.0 TMDS hard ceiling  : 600.00 MHz
+  => 1187.20 MHz is 1.98x the TMDS limit; only FRL can carry it.
+
+--- 6. LINK / STREAM ENCODER ----------------------------------------
+HPO:   OTG Inst     Link   Pixel Format   Depth   ODM Segments   Lanes   Borrow   h_active   h_blank
+[0]:          0   Training        4:4:4      12              0       4   ACTIVE       3840       560
+
+  Lanes 4, pixel format 4:4:4, depth 12 bpc, ODM Segments 0 (single pipe).
+
+Max output bpc reported by the driver:
+  Maximum: 12
+
+--- 7. UNCOMPRESSED (no DSC needed) ---------------------------------
+DSC: CLOCK_EN  SLICE_WIDTH  Bytes_pp
+[0]: 0         0            0         
+
+[1]: 0         0            0         
+  CLOCK_EN 0 => DSC disabled. 4K120 4:4:4 12-bit carried uncompressed.
+
+--- 8. NO UNDERFLOW -------------------------------------------------
+HUBP:  format  addr_hi  width  height  rot  mir  sw_mode  dcc_en  blank_en  clock_en  ttu_dis  underflow   min_ttu_vblank       qos_low_wm      qos_high_wm
+[ 0]:      8h      83h   1920    1080   0h   0h       3h       1         0         1        0         0h           63.760            0.000           14.800
+[ 1]:      8h      83h   3840    2160   0h   0h       3h       1         0         1        0         0h           63.760            0.000           14.800
+[ 2]:      8h      83h   3840    2160   0h   0h       3h       1         0         1        0         0h           63.760            0.000           14.800
+[ 3]:      0h       0h      0       0   0h   0h       0h       0         0         0        0         0h            0.000            0.000            0.000
+  underflow column reads 0h on every active pipe.
+
+--- 9. SINK (LG C9) HDR CAPABILITY ----------------------------------
+  HDR Static Metadata Data Block:
+    Electro optical transfer functions:
+      Traditional gamma - SDR luminance range
+      SMPTE ST2084
+      Hybrid Log-Gamma
+    Supported static metadata descriptors:
+      Static metadata type 1
+  YCbCr 4:2:0 Capability Map Data Block:
+    VIC  97:  3840x2160   60.000000 Hz  16:9    135.000 kHz    594.000000 MHz
+
+--- 10. KNOWN LIMITATIONS -------------------------------------------
+VRR: not available. FRL shipped in 7.2 without HDMI VRR (upstream commit
+     c3778921bf0d gates FRL off by default for exactly this reason).
+     Min: 0
+     Max: 0
+CEC: no adapter registered. The cec module is loaded but amdgpu does not
+     expose a CEC adapter on its native HDMI ports:
+     cec                    98304  2 drm_display_helper,amdgpu
+     /dev/cec*: none
+
+======================================================================
+ SUMMARY: 3840x2160 @ 120 Hz, RGB 4:4:4, 12 bpc, uncompressed,
+ single pipe, zero underflow, over the native HDMI port at a
+ 1187.20 MHz pixel clock -- 1.98x the HDMI 2.0 TMDS ceiling.
+======================================================================
+
+======================================================================
+ ADDENDUM -- HDR CONFIRMED ACTIVE (second capture, HDR game running)
+ Captured: 2026-08-06 06:27:32 UTC
+======================================================================
+
+--- 11. HDR OUTPUT ACTIVE -------------------------------------------
+Connector HDMI-A-1 'Colorspace' property = 9
+  DRM_MODE_COLORIMETRY_BT2020_RGB == 9 (include/drm/drm_connector.h)
+
+  This is the exact test gamescope uses to report HDR as active
+  (src/Backends/DRMBackend.cpp, CDRMConnector::IsHDRActive):
+      return GetProperties().Colorspace->GetCurrentValue()
+             == DRM_MODE_COLORIMETRY_BT2020_RGB;
+
+  Earlier capture on the SDR desktop read Colorspace = 0 (Default).
+  It is now 9, i.e. the output switched into BT.2020 RGB.
+
+Connector 'content type' = 4 (Game) -- drives the HDMI ALLM signal.
+Connector 'max bpc'      = 16
+
+--- 12. SCANOUT FORMAT CHANGED FOR HDR ------------------------------
+HUBP surface format on the composited plane changed 8h -> 18h between
+the SDR and HDR captures (8h = 32-bit ARGB8888; 18h = a 64-bit
+half-float surface, the format gamescope composites HDR into).
+HUBP:  format  addr_hi  width  height  rot  mir  sw_mode  dcc_en  blank_en  clock_en  ttu_dis  underflow   min_ttu_vblank       qos_low_wm      qos_high_wm
+[ 0]:      8h      83h   1920    1080   0h   0h       3h       1         0         1        0         0h           61.880            0.000           14.800
+[ 1]:      8h      83h   3840    2160   0h   0h       3h       1         0         1        0         0h           61.880            0.000           14.800
+[ 2]:     18h      82h   3840    2160   0h   0h       3h       1         0         1        0         0h           61.880            0.000           14.800
+[ 3]:      0h       0h      0       0   0h   0h       0h       0         0         0        0         0h            0.000            0.000            0.000
+
+--- 13. LINK UNCHANGED UNDER HDR LOAD -------------------------------
+HPO:   OTG Inst     Link   Pixel Format   Depth   ODM Segments   Lanes   Borrow   h_active   h_blank
+[0]:          0   Training        4:4:4      12              0       4   ACTIVE       3840       560
+
+  Still 4 lanes, 4:4:4, 12 bpc, single pipe, underflow 0h -- while
+  running an HDR game at 4K120.
+
+Sink confirmation: the LG C9's own OSD reports HDR, and SteamOS
+reports HDR enabled.
+
+======================================================================
+ FINAL: 3840x2160 @ 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10
+ (BT.2020 RGB), zero underflow, over the native HDMI port on a
+ Radeon RX 9070 XT -- using HDMI 2.1 FRL merged in Linux 7.2.
+======================================================================

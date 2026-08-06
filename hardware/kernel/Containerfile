@@ -1,0 +1,8 @@
+FROM docker.io/library/archlinux:base-devel
+
+RUN pacman -Sy --noconfirm --needed \
+        bc cpio flex bison libelf pahole perl python tar xz zstd kmod \
+        gettext git rsync inetutils diffutils \
+    && pacman -Scc --noconfirm
+
+WORKDIR /work
