@@ -297,7 +297,31 @@ $ nm -u amdgpu.ko | rg -i cec
 
 What is *absent* is the whole adapter-registration API - `cec_allocate_adapter`, `cec_register_adapter`, and Maxime Ripard's newer `drmm_connector_hdmi_cec_adapter_register`. That last one is merged upstream, but its only consumers are **vc4** (Raspberry Pi) and the **adv7511** bridge - SoC HDMI transmitters with a physically wired CEC line. No amdgpu, i915/xe or nouveau use of it.
 
-So there is nothing for a native HDMI port to attach to. The `cec` module showing a refcount of 2 against `drm_display_helper` and `amdgpu` is the DP-tunnelling path being linked in, not an adapter being registered.
+Note that `drm_display_helper.ko` *does* import `cec_allocate_adapter` and `cec_register_adapter` - the adapter machinery is present and one DPCD capability bit away from running. It is `drm_dp_cec.c` that calls it, gated at `drm_dp_cec_cap()` on `DP_CEC_TUNNELING_CAPABLE` in the branch device's DPCD. There is simply no HDMI path into it.
+
+#### And the silicon has no CEC controller either
+
+The driver-side answer invites the obvious follow-up: is amdgpu just neglecting hardware that exists? Checked against AMD's own register headers in the 7.2-rc6 tree:
+
+| Where | CEC content |
+| --- | --- |
+| `include/asic_reg/dcn/` (DCN 1.0 → 4.1.0) | **none** - zero macros containing `CEC`, any generation |
+| `include/asic_reg/dce/` (DCE 6 → 11.2) | one bit: `DC_PINSTRAPS__DC_PINSTRAPS_BIF_CEC_DIS` |
+| `display/dc/` (the layer that touches registers) | **none** |
+| `display/dmub/inc/dmub_cmd.h` | **none** - no CEC command in the DMUB enum |
+| `drivers/gpu/drm/radeon/` | **none** |
+
+That single DCE bit is a read-only pinstrap reporting whether a *board-level* CEC function is strapped off, sitting next to `DC_PINSTRAPS_AUDIO` and `DC_PINSTRAPS_CONNECTIVITY`. It is not a controller: no TX or RX buffer, no logical-address register, no status or interrupt register, no clock divider. **No `.c` file in the kernel reads it.**
+
+So there is no "DCE had CEC and DCN dropped it" story - it was never in the DCE headers either. There is no register block to program and no firmware command to send.
+
+What amdgpu *does* have is `amdgpu_dm_initialize_hdmi_connector()` (`amdgpu_dm.c:9531`), called for `DRM_MODE_CONNECTOR_HDMIA`/`HDMIB` only, whose entire job is `cec_notifier_conn_register()` plus `cec_notifier_set_phys_addr()` on hotplug and `phys_addr_invalidate()` on unplug or suspend. It publishes an address for someone else's adapter and transmits nothing. `hdmi_cec_state` in debugfs (`amdgpu_dm_debugfs.c:2937`) prints only whether that notifier pointer is non-NULL - which is why it reads `1` on a machine with no CEC at all.
+
+#### What is *not* established
+
+The physical CEC pin (HDMI pin 13) may or may not be routed to anything on this card or board. No AMD statement, schematic or teardown was found either way, and the SMBus scan here found no CEC controller at the `ch7322` (`0x75`) or `tda9950` (`0x34`) addresses. That question is unresolved - and moot, because with no controller in the ASIC there is nothing to drive a wired pin.
+
+This claim would be falsified by anyone producing `cec-ctl -d /dev/cec0 -S` output from a machine with a confirmed native-HDMI connection and no USB dongle or DP adapter in the chain. No such report exists in the amd-gfx archives, freedesktop GitLab, or the usual forums. Nvidia is on the record with the same answer for their own hardware - an Nvidia employee on their developer forum (Aug 2022) said HDMI-CEC "is not going to be implemented at this moment as it needs **hardware changes on the board**". The CEC pin is optional in the HDMI spec, and no AIB partner advertises it.
 
 **Verdict: not closable in software on the native HDMI port.** No module, parameter or debugfs knob registers an adapter, because the capability is not in the driver. The options:
 
@@ -310,7 +334,11 @@ So there is nothing for a native HDMI port to attach to. The `cec` module showin
 
 They are the DP-AUX tunnel, not the HDMI port. The clearest evidence is [Twsts/steamos-cec-toolkit](https://github.com/Twsts/steamos-cec-toolkit), a SteamOS CEC toolkit whose **reference hardware is a Radeon 9070 XT with a UGREEN DisplayPort-to-HDMI CEC adapter** - the same class of device this build removed to get FRL. It requires `/dev/cec0` to already exist via that adapter; it does not claim GPU-native CEC. No first-hand report of `/dev/cec0` appearing from a Radeon's own HDMI connector turned up anywhere.
 
-There is no AMD statement or teardown either way on whether the CEC pin is physically wired on consumer Radeon boards. That question is moot while the driver has no adapter to wire it to, and it is not the claim being made here.
+The other thing routinely misread is [Phoronix's 2018 write-up](https://www.phoronix.com/news/AMDGPU-Nouveau-CEC-Tunnel), quoted as "AMD has CEC support now". Its actual sentence is "AMDGPU and Radeon can now handle passing CEC commands **when using these DP/USB-C to HDMI adapters**". That is the tunnel, and it is the sentence being dropped.
+
+Worth ruling out before believing any report: a USB CEC dongle elsewhere in the machine, an AVR doing the switching, the TV controlling *other* devices over its own bus, or ARC/eARC being mistaken for CEC. The one question that resolves nearly all of them is "is there anything in a DisplayPort output, or a USB port?".
+
+**A real counter-example, and why it does not apply.** ChromeOS's `cros-ec-cec` driver exposes working CEC on machines with AMD graphics - but it is the mainboard's embedded controller driving the pin over its own GPIO, entirely independent of the GPU. Same category as a USB dongle, just soldered down. It proves the pin *can* be routed and driven when a vendor chooses to; it is not GPU-native CEC and there is no such EC on this board. The open, unresolved [Framework Desktop feature request](https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/129) for CEC on an AMD Ryzen AI 300 board is the same story from the other side.
 
 #### Untested idea: CEC on a spare DP output, keeping HDMI for video
 
