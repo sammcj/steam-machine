@@ -505,8 +505,7 @@ runtime). The session-select shim takes effect immediately.
 | `/etc/systemd/system/steam-machine-display.service` | yes | yes | `/etc/systemd/system/*.service` is keep-listed |
 | `/usr/local/bin/steamos-session-select` | yes | **no** | rootfs subvol is replaced — reinstalled by the boot unit |
 | `~/.bashrc` line, Desktop shortcuts | yes | yes | `/home` is a separate partition |
-| `/etc/systemd/system/steam-machine-display-{redetect,redetect-boot,redetect-resume,hotkey}.service` | yes | yes | `/etc/systemd/system/*.service` is keep-listed |
-| `/etc/udev/rules.d/99-steam-machine-display-redetect.rules` | yes (`/etc` overlay) | yes | `atomic-update.conf.d` keep entry + `--boot` |
+| `/etc/systemd/system/steam-machine-display-hotkey.service` | yes | yes | `/etc/systemd/system/*.service` is keep-listed |
 
 The re-detect scripts themselves live in the repo on `/home` and are run from
 there by the units, so they need no rootfs unlock and cannot be deleted by an
@@ -768,14 +767,36 @@ harmless, but the desktop redraws.
 ### Triggers
 
 `bin/display-redetect` wraps the above with a lock, a per-trigger debounce and
-connector auto-detection. Four things call it:
+connector auto-detection. One thing calls it:
 
 | Trigger | Unit | When | Covers |
 | --- | --- | --- | --- |
 | **Shift+Esc** | `steam-machine-display-hotkey.service` | any time | everything — the escape hatch that works when the screen is already black |
-| Controller connect | udev rule → `steam-machine-display-redetect.service` | DualSense connects, USB or BT | walking in and turning the TV on |
-| Boot | `steam-machine-display-redetect-boot.service` | +25 s after `graphical.target` | TV already on at boot |
-| Resume | `steam-machine-display-redetect-resume.service` | +8 s after `suspend.target` | TV already on at resume |
+
+#### Retired triggers (2026-08-06)
+
+Three automatic triggers used to fire as well. They existed because the
+**DP→HDMI converter swallowed hot-plug detect** — the GPU never saw the TV come
+back, so something had to force a re-probe on its behalf. On the native HDMI
+port the TV asserts real HPD and amdgpu re-detects by itself, so all three now
+do nothing except blank the screen for a second at a predictable moment.
+
+| Retired trigger | Unit | Was |
+| --- | --- | --- |
+| Controller connect | udev rule → `steam-machine-display-redetect.service` | DualSense connects, USB or BT |
+| Boot | `steam-machine-display-redetect-boot.service` | +25 s after `graphical.target` |
+| Resume | `steam-machine-display-redetect-resume.service` | +8 s after `suspend.target` |
+
+`install.sh` actively **retires** them (`retire_redetect_triggers`): disables
+each unit, deletes its unit file, and deletes the udev rule. That runs on
+`--install` *and* `--boot`, so a SteamOS A/B update that
+restores a keep-listed unit file cannot bring them back. A plain `systemctl
+disable` would not have held — `/etc/systemd/system/*.service` is on Valve's
+keep list.
+
+The unit sources are still in `units/`; re-adding the names to
+`REDETECT_UNITS_TRIGGERED` in `install.sh` puts them back if a future display
+chain swallows HPD again.
 
 Each trigger keeps its **own** debounce stamp
 (`/run/steam-machine-display-redetect.<tag>.stamp`). Sharing one would let the
@@ -790,14 +811,19 @@ does not grab the devices, so Esc still reaches whatever has focus.
 
 ### What still is not covered
 
-Pick up the controller *before* switching the TV on and the re-detect fires
-into a dark TV and achieves nothing. Shift+Esc is the fallback. The ordering
-that avoids the whole problem is **TV on first, then wake the machine** — then
-the session's own modeset lands with the TV awake and no trigger is needed.
+Historically: pick up the controller *before* switching the TV on and the
+re-detect fired into a dark TV and achieved nothing. Shift+Esc was the
+fallback. The ordering that avoided the whole problem is **TV on first, then
+wake the machine**.
 
-Ruled out as fixes: waking the TV over the network (it is deliberately off the
-LAN — LG's webOS phones home), and going back to the native HDMI port (real HPD
-from the TV, but 4K60 only until amdgpu gets FRL on Linux 7.2+).
+Ruled out at the time: waking the TV over the network (it is deliberately off
+the LAN — LG's webOS phones home), and going back to the native HDMI port (real
+HPD from the TV, but 4K60 only until amdgpu gets FRL on Linux 7.2+).
+
+**That second option is what actually fixed it.** `hardware/kernel/` now runs
+4K120 over the native port on a hand-built 7.2-rc6, the converter is out of the
+chain, and real HPD makes the whole trigger apparatus unnecessary. Shift+Esc
+stays as an escape hatch.
 
 ## Warning: the TV is this machine's only console
 
