@@ -15,6 +15,13 @@ git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
 | `0003` FreeSync over AMD VSDB | upstream, unmerged | Accepts `SIGNAL_TYPE_HDMI_FRL` when parsing the AMD VSDB, and emits the VTEM infopacket on FRL streams. |
 | `0004` HDMI 2.1 VRR from HF-VSDB | upstream, unmerged | Falls back to the HDMI Forum VRR range when the AMD VSDB provides none. |
 | `0005` HDMI ALLM | upstream, unmerged | Sends the HF-VSIF with `ALLM_Mode=1` when the sink supports it and content type is Game or VRR is active. |
+| `0006` restore FRL cap on non-destructive verify | upstream, unmerged | One line. Without it an established FRL link **collapses to TMDS across a hotplug** — and since VRR keys on `SIGNAL_TYPE_HDMI_FRL`, it takes VRR with it. |
+
+## Why 0006 matters here more than its size suggests
+
+`verify_link_capability_non_destructive()` in `link_detection.c` assigned the *DP* `verified_link_cap` on the HDMI branch and left `frl_verified_link_cap` stale, so `frl_link_rate` read back as `HDMI_FRL_LINK_RATE_DISABLE` and the stream fell back to TMDS. A TV that gets switched off and on is a routine HPD event on this machine, and the symptom would be a silent drop to 4K60 with no error anywhere and `--status` still reporting everything installed.
+
+Provenance: **Fangzhi Zuo** (AMD), Reviewed-by **Harry Wentland**. Posted standalone on 30 July 2026 (`20260730205047.1016922-1-jerry.zuo@amd.com`) and picked up into Tom Chung's **"DC Patches Aug 10 2026"** as patch 31/34 (`20260805063937.2145774-32-chiahsuan.chung@amd.com`), which is the merge path — so this one should land upstream on its own and can be dropped at the next rebase.
 
 ## Provenance of 0002–0005
 
@@ -56,11 +63,13 @@ sudo ../install.sh --cache     # repack the artefact tarball from the build tree
 sudo ../install.sh --install   # deploy, regenerate initramfs, rewrite custom.cfg
 ```
 
-**Watch the version string.** `CONFIG_LOCALVERSION="-frlprobe"` is unchanged by `0002`–`0005`, so a rebuild produces the *same* `7.2.0-rc6-frlprobe` release string and overwrites `/usr/lib/modules/7.2.0-rc6-frlprobe` and `/boot/frl/` in place. There is no second menu entry to fall back to. Before deploying a rebuild, keep the working artefact:
+**Watch the version string.** `CONFIG_LOCALVERSION="-frlprobe"` is unchanged by `0002`–`0006`, so a rebuild produces the *same* `7.2.0-rc6-frlprobe` release string and overwrites `/usr/lib/modules/7.2.0-rc6-frlprobe` and `/boot/frl/` in place. There is no second menu entry to fall back to. Before deploying a rebuild, keep the working artefact under a name that says what it predates:
 
 ```bash
-cp -n ~/.cache/frl-kernel/kernel.tar.zst ~/.cache/frl-kernel/kernel.tar.zst.pre-vrr
+cp -n ~/.cache/frl-kernel/kernel.tar.zst ~/.cache/frl-kernel/kernel.tar.zst.pre-<change>
 ```
+
+Kept so far: `.pre-vrr` (before `0002`–`0005`) and `.pre-frlrestore` (before `0006`).
 
 To roll back: boot the stock Valve kernel from the GRUB menu, then
 
@@ -69,6 +78,8 @@ cp ~/.cache/frl-kernel/kernel.tar.zst.pre-vrr ~/.cache/frl-kernel/kernel.tar.zst
 sudo rm -rf /boot/frl /usr/lib/modules/7.2.0-rc6-frlprobe
 sudo ../install.sh --install
 ```
+
+`--install` now redeploys the tarball unconditionally, so restoring the backup and re-running it is sufficient; it used to skip the extract when the old files were still present, which made this rollback a no-op.
 
 Bumping `CONFIG_LOCALVERSION` for a rebuild would let both kernels coexist with their own menu entries, at the cost of a full module rebuild and a second copy of the modules. Worth it for a risky change; not done here.
 
