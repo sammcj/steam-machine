@@ -1,12 +1,6 @@
 # Follow-up for ValveSoftware/SteamOS#2698
 
-Draft comment for <https://github.com/ValveSoftware/SteamOS/issues/2698> - "SteamOS doesn't support 4k 120hz via HDMI (AMD Radeon RX 9070 XT)".
-
-The FRL material is already in the issue description. This is the **VRR follow-up**: the description says VRR doesn't work, and that is now out of date.
-
-Paste the section between the rules as a comment.
-
----
+## VRR and ALLM now work too
 
 Update: HDMI VRR and ALLM now work on this setup too, so the "known limitations" in the description are stale. Same kernel, plus Fangzhi Zuo's four patches from 30 July (`20260730171754.704049-1-jerry.zuo@amd.com`), all Reviewed-by Harry Wentland on 31 July, still unmerged.
 
