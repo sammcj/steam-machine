@@ -2,11 +2,28 @@
 
 All of this was verified on-machine on 2026-08-02, not inferred.
 
-## Status: working
+## Status: superseded by the native HDMI port (2026-08-06)
 
-**4K120 is working**, over an active DP 1.4 → HDMI 2.1 converter on `DP-1`.
+**The converter is out of the chain.** 4K120 now runs over the **native HDMI
+port** on `HDMI-A-1` via HDMI 2.1 FRL, on a hand-built mainline 7.2-rc6 kernel —
+see [`../kernel/README.md`](../kernel/README.md), which is the current source of
+truth for the display path. Native FRL gives **12 bpc uncompressed (DSC off)**
+plus **HDMI VRR at 40–120 Hz** and ALLM, none of which the converter could do.
+
+Everything below this line is the converter-era record. It is kept because it
+holds measurements that are still true about *that* hardware, and because the
+converter remains the fallback if the FRL kernel ever has to be rolled back. Two
+conclusions in it are now **retracted**:
+
+- "This is a **better** result than native HDMI 2.1 FRL would have given" — it is
+  not. That was measured against the 4:2:0 workaround, not against real FRL.
+- The vertical seam was never separated from the converter. It has not been seen
+  once on the native path.
+
+### Converter-era status (historical)
+
+**4K120 was working**, over an active DP 1.4 → HDMI 2.1 converter on `DP-1`.
 The UGREEN 80397 worked immediately on hotplug — no reboot, no configuration.
-The native HDMI port is now unused (`HDMI-A-1: disconnected`).
 
 Measured state:
 
