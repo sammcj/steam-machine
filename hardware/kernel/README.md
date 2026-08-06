@@ -302,7 +302,9 @@ Everything *downstream* is already fine. `optc401_set_drr()` and `optc401_set_vt
 | 3/4 `Add HDMI 2.1 VRR support from HF-VSDB`                                | falls back to the HDMI Forum VRR range when the AMD VSDB has none                                       |
 | 4/4 `Add HDMI ALLM support`                                                | ALLM in the HF-VSIF                                                                                     |
 
-Not merged, and not in `amd-staging-drm-next` - but note *why*: that branch's tip is `d8ab7636160e`, dated **29 July**, one day before the series was posted, and it has not moved since. Its absence there was never evidence of anything. An earlier version of this section said "nothing to build"; it was grepping for Valve's identifiers (`allm_mode`, `hdmi_vrr_desktop_mode`, `freesync_pcon_allow_all`) rather than AMD's, and those belong to a different, TMDS/PCON-only implementation.
+Not merged, and not in `amd-staging-drm-next` - but note *why*: that branch's tip is `d8ab7636160e`, dated **29 July**, one day before the series was posted, and it has not moved since. Its absence there is not evidence of anything.
+
+Two traps when searching for this work: check the branch's tip date before reading an absence as a decision, and grep for **AMD's** identifiers rather than Valve's. `allm_mode`, `hdmi_vrr_desktop_mode` and `freesync_pcon_allow_all` belong to a different, TMDS/PCON-only implementation and finding none of them says nothing about the FRL path.
 
 The thread mbox is fetchable from lore (Anubis blocks a plain `curl`; a git user-agent passes) and the patches apply by hand. 7.3 does not exist yet - 7.2 is still at rc6 - so this was a hand-applied in-review series or nothing. **Applied 2026-08-06**; see [patches/](patches/) for the ported series and what had to change to land it on mainline.
 

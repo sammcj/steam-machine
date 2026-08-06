@@ -146,14 +146,14 @@ HUBP:  format  addr_hi  width  height  rot  mir  sw_mode  dcc_en  blank_en  cloc
     VIC  97:  3840x2160   60.000000 Hz  16:9    135.000 kHz    594.000000 MHz
 
 --- 10. KNOWN LIMITATIONS -------------------------------------------
-VRR: not available AT THE TIME OF THIS CAPTURE. FRL shipped in 7.2 without
-     HDMI VRR (upstream commit c3778921bf0d gates FRL off by default for
-     exactly this reason).
+VRR: not available at the time of this capture -- stock 7.2 ships FRL
+     without HDMI VRR (upstream commit c3778921bf0d gates FRL off by
+     default for exactly this reason).
      Min: 0
      Max: 0
-     SUPERSEDED -- see ADDENDUM 2 at the end of this file. VRR was solved
-     later the same day by applying AMD's unmerged 4-patch series; the same
-     debugfs entry now reads Min: 40 / Max: 120 and vrr_capable is 1.
+     Solved later the same day by applying AMD's unmerged 4-patch series;
+     the same debugfs entry then reads Min: 40 / Max: 120 and vrr_capable
+     is 1. Full capture in ADDENDUM 2 at the end of this file.
 CEC: no adapter registered. The cec module is loaded but amdgpu does not
      expose a CEC adapter on its native HDMI ports:
      cec                    98304  2 drm_display_helper,amdgpu
