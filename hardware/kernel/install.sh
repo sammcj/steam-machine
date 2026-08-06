@@ -180,19 +180,34 @@ regen_initramfs() {
     # good one, and the only check was that *an* image existed -- which a stale
     # image from the previous kernel satisfies. That boots the default entry
     # into an initramfs whose modules will not load.
-    local out rc=0
+    # mkinitcpio always exits 1 here, because the SteamOS hooks ask for modules
+    # that only exist in Valve's kernel (steamdeck, steamdeck_hwmon,
+    # leds_steamdeck, extcon_steamdeck) plus blake2b_generic, which mainline
+    # builds in rather than as a module. Those are expected and harmless -- the
+    # running kernel booted from an image with exactly these errors. So the exit
+    # status alone cannot be the test: filter the known-benign lines and fail on
+    # anything left, then require both images to be newer than this run.
+    local out rc=0 marker unexpected
+    marker="$(mktemp)"
     out="$(mkinitcpio -p linux-frlprobe 2>&1)" || rc=$?
-    printf '%s\n' "$out" | grep -Ei 'error|image generation successful' \
-        | grep -v 'steamdeck\|blake2b_generic' || true
-    if [[ $rc -ne 0 ]]; then
-        printf '%s\n' "$out" >&2
-        die "mkinitcpio failed (exit $rc)"
+
+    unexpected="$(printf '%s\n' "$out" | grep -E '^==> ERROR' \
+        | grep -Ev "module not found: '(blake2b_generic|steamdeck|steamdeck_hwmon|leds_steamdeck|extcon_steamdeck)'" \
+        || true)"
+    if [[ -n $unexpected ]]; then
+        printf '%s\n' "$unexpected" >&2
+        rm -f "$marker"
+        die "mkinitcpio reported errors beyond the expected missing Deck modules (exit $rc)"
     fi
-    [[ -f "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" ]] \
-        || die "mkinitcpio produced no initramfs"
-    # Guards against a stale image surviving a newer kernel being deployed.
-    [[ "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" -nt "$BOOT_SUBDIR/vmlinuz-linux-frlprobe" ]] \
-        || warn "initramfs is older than the kernel image -- regeneration may not have run"
+
+    local img
+    for img in "$BOOT_SUBDIR/initramfs-linux-frlprobe.img" \
+               "$BOOT_SUBDIR/initramfs-linux-frlprobe-fallback.img"; do
+        [[ -f $img ]] || { rm -f "$marker"; die "mkinitcpio produced no $img"; }
+        [[ $img -nt $marker ]] || { rm -f "$marker"; die "$img was not regenerated (stale image)"; }
+    done
+    rm -f "$marker"
+    log "initramfs regenerated (mkinitcpio exit $rc, expected Deck-module errors only)"
 }
 
 install_grub_entry() {
