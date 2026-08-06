@@ -1,4 +1,4 @@
-# Kernel - HDMI 2.1 FRL for 4K120 on the native HDMI port
+# Kernel - HDMI 2.1 FRL for 4K120 and VRR on the native HDMI port
 
 ## Status: working, persistent, and the default boot entry
 
