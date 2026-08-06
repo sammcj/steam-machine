@@ -535,5 +535,28 @@ Specifically, be aware that:
 - **7.2-rc6 is a release candidate.** It gets no stable or CVE fixes. Rebuild at 7.2 final.
 - **You lose Valve's kernel patches** while running it. See [the gap](#the-probe-kernel-is-mainline-so-valves-patches-are-gone-m) for what that costs on a desktop.
 - **A SteamOS update leaves you on the stock kernel for one boot.** Expected, not a fault - see [After a SteamOS update](#after-a-steamos-update).
+- **One hung power-off, 2026-08-06.** See below. Not reproduced since, cause not established.
+
+### A hung power-off, observed once (2026-08-06)
+
+After a ~3.5 hour gaming session, Steam → Shutdown ran the full sequence and then the machine never actually powered off. It sat with the fans and lights on, no network, and a short press of the power button did nothing; it took a 4-second hold to force it off.
+
+What the logs establish:
+
+| Evidence | What it rules in or out |
+|---|---|
+| `wtmp` has a clean `shutdown system down` record | systemd completed its whole shutdown sequence |
+| `BTRFS ... last unmount of filesystem`, and no fs recovery on the next boot | filesystems were unmounted cleanly |
+| No journal file created between the shutdown and the next boot | nothing reached userspace in that window - a Wake-on-LAN packet sent during it produced no boot |
+| `ramoops` is registered and `/sys/fs/pstore` is **empty** | no panic and no oops was captured, so this was a hang rather than a crash |
+| `/sys/class/net/enp9s0/device/power/wakeup` = `enabled` | WoL was armed; its failing to wake the machine is a symptom, not a misconfiguration |
+
+Read together: systemd finished, then the kernel wedged in the final power-off and the machine never reached S5. That accounts for all three symptoms at once - lights on because it never powered down, no SSH because the network stack was gone, and a dead power button because the kernel was past the point where it handles ACPI events. The WoL packet had nothing to wake.
+
+The alternative - that it did reach S5, WoL woke it, and it hung before journald started - would need a hang in GRUB or very early kernel that then did not recur on the hard power-on 27 minutes later with nothing changed. Possible, not likely.
+
+**Not attributed to any specific patch.** It happened on the `0002`-`0005` build, before `0006` existed. Two things cannot be excluded: the modules under `/usr/lib/modules/` had been replaced while that kernel was running earlier the same day (unlikely to matter - `CONFIG_MODVERSIONS` is off and module symbols resolve at load time), and it was the first long real-world session on the VRR-patched display driver.
+
+**If it happens again**, capture it rather than power-cycling blind: leave the TV **on** through the shutdown so a panic or a stuck task is visible on the console, and check `/sys/fs/pstore` on the next boot. Removing `quiet splash` from the FRL entry in `custom.cfg` makes the shutdown messages readable.
 
 The design assumes the display is the machine's only console, so a failed modeset would otherwise be a lockout. Three things make that survivable, and `install.sh` sets all of them up: `grub.cfg` is never modified, the whole FRL boot path is one file that GRUB simply skips if absent, and `set fallback` boots the stock Valve kernel automatically if the FRL entry cannot load. Before rebooting into any newly built kernel, confirm `sudo ./install.sh --status` reports `grub.cfg is stock : yes`. See the same warning in [hardware/display/](../display/README.md).
