@@ -31,10 +31,11 @@ OTG:  v_bs  v_be  v_ss  v_se  vpol  vmax  vmin  vmax_sel  vmin_sel  h_bs  h_be  
 [0]:  2242    82     0    10     0     0     0         0         0  4224   384     0    88     0  4399  2249          0        0
 
 
-  htotal x vtotal x refresh = 4399 x 2249 x 120 Hz
-  => pixel clock 1187.20 MHz
+  htotal x vtotal x refresh = 4400 x 2250 x 120 Hz  (DTN prints the raw OTG
+  registers, which store total-1; dcn10_optc.c programs OTG_H_TOTAL = h_total-1)
+  => pixel clock 1188.00 MHz
   HDMI 2.0 TMDS hard ceiling  : 600.00 MHz
-  => 1187.20 MHz is 1.98x the TMDS limit; only FRL can carry it.
+  => 1188.00 MHz is 1.98x the TMDS limit; only FRL can carry it.
 
 --- 6. LINK / STREAM ENCODER ----------------------------------------
 HPO:   OTG Inst     Link   Pixel Format   Depth   ODM Segments   Lanes   Borrow   h_active   h_blank
@@ -84,7 +85,7 @@ CEC: no adapter registered. The cec module is loaded but amdgpu does not
 ======================================================================
  SUMMARY: 3840x2160 @ 120 Hz, RGB 4:4:4, 12 bpc, uncompressed,
  single pipe, zero underflow, over the native HDMI port at a
- 1187.20 MHz pixel clock -- 1.98x the HDMI 2.0 TMDS ceiling.
+ 1188.00 MHz pixel clock -- 1.98x the HDMI 2.0 TMDS ceiling.
 ======================================================================
 
 ======================================================================

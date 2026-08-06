@@ -15,7 +15,7 @@ Full measurement capture, with the raw debugfs output it was read from: [`frl-4k
 | | |
 |---|---|
 | Mode | 3840×2160 @ 120 Hz |
-| Pixel clock | **1187.20 MHz** (htotal 4399 × vtotal 2249 × 120) |
+| Pixel clock | **1188.00 MHz** (htotal 4400 × vtotal 2250 × 120) |
 | HDMI 2.0 TMDS ceiling | 600 MHz — the link is running at **1.98×** it |
 | Lanes | 4 |
 | Pixel format | RGB 4:4:4 |
@@ -26,7 +26,7 @@ Full measurement capture, with the raw debugfs output it was read from: [`frl-4k
 | HDR | `Colorspace = 9` (`DRM_MODE_COLORIMETRY_BT2020_RGB`) while an HDR game runs |
 | Content type | `4` (Game) — drives HDMI ALLM |
 
-The pixel clock is the proof on its own. 600 MHz is a hard ceiling for TMDS signalling; 1187 MHz is only reachable over FRL.
+The pixel clock is the proof on its own. 600 MHz is a hard ceiling for TMDS signalling; 1188 MHz is only reachable over FRL. (The DTN log prints the raw OTG registers, which hold total−1 — `dcn10_optc.c` programs `OTG_H_TOTAL = h_total - 1` — so the `4399 × 2249` it shows is the standard CTA-861 4400 × 2250 timing.)
 
 **Note the ODM row.** [hardware/display/](../display/README.md) records that ODM 2:1 combine is mandatory for 4K120 on this machine, because ~1.19 GHz is more than one DCN pipe can clock out. That holds for the **DP + converter** path it was measured on. It does not hold here: over native FRL the HPO block reports `ODM Segments 0` and every HUBP pipe is the full 3840 wide, not the ~1922 that ODM 2:1 produces. Single pipe, no combine, at the same pixel clock. Worth remembering, because the centre-screen seam that was investigated at length on the converter was suspected of being an ODM stitching artefact — this path does not stitch at all.
 

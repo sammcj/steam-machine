@@ -2,98 +2,71 @@
 
 Draft comment for <https://github.com/ValveSoftware/SteamOS/issues/2698> — "SteamOS doesn't support 4k 120hz via HDMI (AMD Radeon RX 9070 XT)".
 
-The point of this follow-up is to move the issue from "doesn't work" to "here is the exact change, here is the measurement proving it works on this hardware, and here is why it costs you nothing to ship". Everything below was measured on the machine, not quoted from an article.
-
 Paste the section between the rules as a comment.
 
 ---
 
-## It works. Here is what it takes.
+Follow-up: I've got this working on a hand-built kernel, so here are the specifics in case they're useful.
 
-I've since built a kernel that does 4K 120 Hz over the native HDMI port on this exact hardware, so this is no longer a feature request — it's a backport request with a known-good result.
+FRL for DCN 4.0.1 landed in the 7.2 merge window. SteamOS 3.8.24 ships `linux-neptune-616-drm-exec` 6.16.12, so the code isn't present. I checked rather than assumed — `amdgpu.ko` from `linux-neptune-616-drm-exec` 6.16.12, `linux-neptune-618-drm-exec` 6.18.33 and `linux-neptune-618` 6.18.38 all have a byte-identical FRL symbol set, and none contain `dcn401_hpo_frl_stream_encoder`, `link_hdmi_frl` or `link_hwss_hpo_frl`. The `*frl*` symbols present in all three belong to the DP-to-HDMI PCON path, which is why a DP→HDMI 2.1 converter works today and the native port doesn't.
 
-### What now runs
-
-RX 9070 XT (Navi 48, `1002:7550`) → LG C9, native HDMI port, no DP→HDMI converter:
+On mainline `v7.2-rc6` with `amdgpu.dcfeaturemask=0x402`, RX 9070 XT (Navi 48, `1002:7550`) → LG C9 over the native HDMI port:
 
 ```
-Mode        3840x2160 @ 120.00 Hz
-Pixel clock 1187.20 MHz          (1.98x the 600 MHz HDMI 2.0 TMDS ceiling)
-Format      RGB 4:4:4, 12 bpc
-DSC         off (CLOCK_EN 0) -- uncompressed
-Pipes       single (ODM Segments 0)
-Underflow   0
-HDR         active in-game (connector Colorspace = 9, BT2020_RGB)
+3840x2160 @ 120.00 Hz, RGB 4:4:4, 12 bpc
+pixel clock 1188.00 MHz
+DSC off (CLOCK_EN 0)
+single pipe (ODM Segments 0)
+underflow 0
 ```
 
-The DTN log's HPO block, which is the thing that proves it's the *native* FRL path and not the PCON one:
+DTN log, confirming it's the native FRL path rather than PCON:
 
 ```
 HPO:   OTG Inst     Link   Pixel Format   Depth   ODM Segments   Lanes   Borrow   h_active   h_blank
 [0]:          0   Training        4:4:4      12              0       4   ACTIVE       3840       560
 ```
 
-`dmesg` also shows `hdmi_frl_status_polling_workque`, which only exists on the native FRL path.
+`dmesg` also shows `hdmi_frl_status_polling_workque`. HDR works — connector `Colorspace` goes `0` → `9` (`BT2020_RGB`) in-game, so gamescope's colour offload is unaffected.
 
-### The change
+If a backport is on the table, the merged commits are these, all in `v7.2-rc6` (`075b74841bd0`):
 
-FRL for DCN 4.0.1 landed in **Linux 7.2** (merged 2026-05-11). SteamOS 3.8.24 ships `linux-neptune-616-drm-exec` 6.16.12, so the code is simply not present — this isn't a configuration problem on the SteamOS side.
+```
+c3778921bf0d  Disable FRL and add module param to enable it
+443290d70b01  Add AV mute wait frames to dce110_set_avmute
+c216b39fbbc4  Increase HDMI AV mute wait from 2 to 3 frames
+fed376e1f2e3  Fix kdoc parameter names for DSC padding helper
+ee911514a9f8  Rename hdmi_frl_borrow_mode
+5726af470517  Widen FRL debug knobs to unsigned int
+1e13b7eb67f9  Widen dc_hdmi_frl_flags.force_frl_rate to unsigned int
+```
 
-I checked that rather than assuming it. I extracted `amdgpu.ko` from three neptune kernels — `linux-neptune-616-drm-exec` 6.16.12, `linux-neptune-618-drm-exec` 6.18.33 and `linux-neptune-618` 6.18.38 — and all three carry a **byte-identical** FRL symbol set. None of them contain `dcn401_hpo_frl_stream_encoder`, `link_hdmi_frl` or `link_hwss_hpo_frl`. The `*frl*` symbols they *do* have belong to the DP-to-HDMI PCON path, which is why a DP→HDMI 2.1 converter works today and the native port does not.
+Plus the 14-patch series and the ~9 register-header commits split out of it before merge — a `git am` of the mailing-list v3 mbox won't compile without those, so cherry-picking merged SHAs is the easier route. The two AV-mute commits are `Cc: stable` and fix garbled display after link re-establishment.
 
-So the ask is one of:
+Worth noting: `c3778921bf0d` leaves FRL off by default behind `DC_FRL_MASK` (bit 10), so carrying the code doesn't change behaviour for existing users or Decks unless they set the mask.
 
-1. Backport the DCN 4.0.1 FRL series to the neptune kernel, or
-2. Base a future neptune kernel on 7.2+.
+Two things that cost me time, in case they're worth a doc note:
 
-If (1), the merged commits are these, all verified present in `v7.2-rc6` (`075b74841bd0`):
+- The parameter is `amdgpu.dcfeaturemask`, not `dc_feature_mask` — the latter is the C variable, and it's what every guide on the web quotes.
+- It replaces the mask rather than OR-ing into it, so the widely-quoted `0x400` clears the default `DC_MULTI_MON_PP_MCLK_SWITCH_MASK` (`0x2`). `0x402` is correct.
 
-| SHA | Subject |
-|---|---|
-| `c3778921bf0d` | Disable FRL and add module param to enable it |
-| `443290d70b01` | Add AV mute wait frames to `dce110_set_avmute` |
-| `c216b39fbbc4` | Increase HDMI AV mute wait from 2 to 3 frames |
-| `fed376e1f2e3` | Fix kdoc parameter names for DSC padding helper |
-| `ee911514a9f8` | Rename `hdmi_frl_borrow_mode` |
-| `5726af470517` | Widen FRL debug knobs to unsigned int |
-| `1e13b7eb67f9` | Widen `dc_hdmi_frl_flags.force_frl_rate` to unsigned int |
+Two things that still don't work, neither of them blockers for the above:
 
-...plus the 14-patch series itself and the ~9 register-header commits that were split out of it before merge. A `git am` of the mailing-list v3 mbox will not compile without those, which is why cherry-picking the merged SHAs is the right route.
+- **HDMI VRR.** 7.2 shipped FRL without it, which is the stated reason it's default-off. The ALLM + HDMI VRR series isn't in `amd-staging-drm-next` either as of today (`d8ab7636160e`) — `allm_mode`, `hdmi_vrr_desktop_mode` and `freesync_pcon_allow_all` are absent from that tree while present in neptune 6.18.
+- **CEC.** amdgpu registers no CEC adapter for its own HDMI ports, so there's no `/dev/cec*` on any kernel. `hdmi_cec_state` reporting `1` is the sink's DDC-advertised capability. Unrelated to FRL.
 
-### Why this costs you nothing to ship
+One SteamOS-side thing, relevant to anyone testing an alternate kernel: `GRUB_TIMEOUT` in `/etc/default/grub*` has no effect — the generated `grub.cfg`'s steamenv header hardcodes `timeout=0`, so no menu appears and an alternate entry is unreachable. `/efi/EFI/steamos/custom.cfg`, sourced later by `41_custom`, is the override that works.
 
-Upstream ships FRL **disabled by default** — that's what `c3778921bf0d` does — behind `DC_FRL_MASK`, bit 10 of `DC_FEATURE_MASK`. So merely having the code in the neptune kernel changes nothing for any existing user or any existing Deck. Nobody's display behaviour moves unless they explicitly opt in.
+Setup, for reproduction:
 
-That makes this a low-risk backport with a large payoff for desktop/console-form-factor SteamOS on RDNA4 + a HDMI 2.1 TV, which is exactly the Steam Machine use case.
+- SteamOS 3.8.24 (`BUILD_ID=20260716.2`), stock kernel 6.16.12
+- Navi 48 `1002:7550`, Ryzen 7 9800X3D, Gigabyte B850M
+- LG C9 (HDMI 2.1, 4K120, 40–120 VRR, HDR10)
+- Kernel: mainline `v7.2-rc6` plus `-DAMD_PRIVATE_COLOR` in `drivers/gpu/drm/amd/display/amdgpu_dm/Makefile` (that's the upstream equivalent of `CONFIG_DRM_AMD_COLOR_STEAMDECK`, needed to keep gamescope's per-plane colour offload on a non-Valve kernel)
 
-### Two traps worth documenting if you do ship it
+Method, config, raw debugfs captures and the install scripts: <https://github.com/sammcj/steam-machine/tree/main/hardware/kernel>
 
-Both cost me time, and every guide on the web gets them wrong:
-
-1. The module parameter is spelled **`amdgpu.dcfeaturemask`**. `dc_feature_mask` is the C variable name, not the parameter name. Everyone quotes the latter.
-2. The parameter **replaces** the mask, it does not OR into it. So the widely-quoted `0x400` silently clears the default `DC_MULTI_MON_PP_MCLK_SWITCH_MASK` (`0x2`). The correct value is **`0x402`**.
-
-### What still doesn't work, for completeness
-
-Neither of these is a regression and neither blocks the above, but flagging so nobody expects them:
-
-- **HDMI VRR.** 7.2 shipped FRL deliberately *without* HDMI VRR, which is the stated reason FRL is off by default. I checked `amd-staging-drm-next` (`d8ab7636160e`, 1034 commits ahead of `v7.2-rc6`) and the ALLM + HDMI VRR "Gaming Features" series is not there yet either — `allm_mode`, `hdmi_vrr_desktop_mode` and `freesync_pcon_allow_all` are absent from the entire staging tree, while all three appear in the neptune 6.18 tree. So VRR over FRL is a later, separate piece of work for everyone.
-- **CEC.** amdgpu registers no CEC adapter for its own HDMI ports, so there's no `/dev/cec*` regardless of kernel. `hdmi_cec_state` reporting `1` is the sink's DDC-advertised capability, not a Linux adapter. Unrelated to FRL.
-
-### One SteamOS-side thing that isn't a kernel issue
-
-Independent of the above, and relevant to anyone testing an alternate kernel on SteamOS: `GRUB_TIMEOUT` in `/etc/default/grub*` has no effect. The generated `grub.cfg`'s steamenv header hardcodes `timeout=0`, so no boot menu is ever shown and an alternate kernel entry is unreachable. The working override is `/efi/EFI/steamos/custom.cfg`, which `/etc/grub.d/41_custom` sources later in the generated config. Might be worth a note in the docs.
-
-### Reproduction details
-
-- SteamOS 3.8.24 (`BUILD_ID=20260716.2`), stock kernel `linux-neptune-616-drm-exec` 6.16.12
-- GPU: Navi 48, `1002:7550` (RX 9070 XT); board Gigabyte B850M, Ryzen 7 9800X3D
-- Display: LG C9 (HDMI 2.1, 4K120, 40–120 VRR, HDR10)
-- Working kernel: mainline `v7.2-rc6` + `-DAMD_PRIVATE_COLOR` in `drivers/gpu/drm/amd/display/amdgpu_dm/Makefile` (keeps gamescope's HDR/colour offload working on a non-Valve kernel — that code is already upstream, just behind a define mainline never sets), booted with `amdgpu.dcfeaturemask=0x402`
-
-Full method, the config used, the raw debugfs captures in both SDR and HDR states, and the install/rollback scripts are here: <https://github.com/sammcj/steam-machine/tree/main/hardware/kernel>
-
-Happy to run any test you'd like on this hardware.
+Happy to run tests on this hardware if that's useful.
 
 ---
 
@@ -101,4 +74,4 @@ Happy to run any test you'd like on this hardware.
 
 - Check the repo URL resolves and that `frl-4k120-evidence.txt` is pushed before linking it.
 - No serials, account IDs, addresses or private hostnames appear above — keep it that way if you edit it.
-- If Valve reply asking for a full `dmesg` with `drm.debug=0x1e`, capture it on the FRL kernel and attach as a file rather than pasting inline.
+- If they ask for a full `dmesg`, capture it on the FRL kernel with `drm.debug=0x1e` and attach as a file rather than pasting inline.
