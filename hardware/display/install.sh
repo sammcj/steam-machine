@@ -615,10 +615,63 @@ do_status() {
 
     do_pipeline
 
+    do_frl
+}
+
+# Native HDMI 2.1 FRL, as delivered by ../kernel/. This used to be a stub that
+# unconditionally printed "unavailable on this kernel" -- true while the stock
+# 6.16 neptune kernel was the only one installed, and wrong ever since.
+#
+# DC_FRL_MASK is bit 10 (0x400) of dcfeaturemask. Upstream ships FRL disabled by
+# default, so the bit being clear is the normal state, not a fault. Note the
+# parameter REPLACES the mask rather than OR-ing it, so the correct value also
+# keeps the default DC_MULTI_MON_PP_MCLK_SWITCH_MASK (0x2) -- hence 0x402.
+DC_FRL_MASK=$((1 << 10))
+
+do_frl() {
     echo
-    echo "native HDMI 2.1 FRL:       "
-    if [[ -f /proc/config.gz ]] || true; then
-        echo "  unavailable on this kernel (needs Linux 7.2+; DC_FRL_MASK absent)"
+    echo "native HDMI 2.1 FRL:"
+
+    local mask
+    mask="$(param dcfeaturemask)"
+    if [[ ! "$mask" =~ ^[0-9]+$ ]]; then
+        printf '  %-24s %s\n' "dcfeaturemask" "unreadable"
+        return 0
+    fi
+
+    printf '  %-24s %s\n' "kernel" "$(uname -r)"
+    if (( mask & DC_FRL_MASK )); then
+        printf '  %-24s %s\n' "DC_FRL_MASK" "set (dcfeaturemask=$(printf '0x%x' "$mask"))"
+    else
+        printf '  %-24s %s\n' "DC_FRL_MASK" "clear -- FRL disabled (need amdgpu.dcfeaturemask=0x402)"
+        return 0
+    fi
+
+    if [[ $EUID -ne 0 ]]; then
+        printf '  %-24s %s\n' "link state" "(needs root -- re-run with sudo -A)"
+        return 0
+    fi
+
+    # The HPO block is the FRL stream encoder. It stays all-zero on a TMDS link,
+    # so a populated Lanes column is the hardware saying the FRL path is live.
+    # "Borrow ACTIVE" is FRL's blanking-period borrow, which TMDS has no concept of.
+    local hpo
+    hpo="$(sed -n '/^HPO:/{n;p;q}' "$DBG_DIR/amdgpu_dm_dtn_log" 2>/dev/null || true)"
+    if [[ -z "$hpo" ]]; then
+        printf '  %-24s %s\n' "link state" "no HPO block in the DTN log"
+        return 0
+    fi
+
+    # Row label is "[ 0]:" -- a space inside the brackets, so awk shifts by one.
+    local fmt depth lanes borrow
+    read -r _ _ _ fmt depth _ lanes borrow _ <<<"$hpo"
+    printf '  %-24s %s\n' "HPO lanes" "$lanes"
+    printf '  %-24s %s\n' "pixel format / depth" "$fmt @ ${depth} bpc"
+    printf '  %-24s %s\n' "blanking borrow" "$borrow"
+    if [[ "$lanes" == 4 && "$borrow" == ACTIVE ]]; then
+        printf '  %-24s %s\n' "link state" "FRL active (4 lanes)"
+    else
+        printf '  %-24s %s\n' "link state" "not FRL -- HPO idle, link is TMDS"
     fi
 }
 
