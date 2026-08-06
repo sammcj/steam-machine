@@ -39,10 +39,11 @@ DSC is doing real work, not decoration. 4K120 RGB 10-bit is ~35.6 Gbps
 uncompressed against HBR3's ~25.9 Gbps effective (8b/10b), so it does not fit;
 at 16 bpp it lands around 19 Gbps, comfortably inside.
 
-This is a **better** result than native HDMI 2.1 FRL would have given, which is
-worth noting given the effort spent chasing FRL: DP + DSC delivers full 4:4:4
-10-bit, where the 4:2:0 workaround below could only manage 8-bit with
-quarter-resolution chroma.
+~~This is a **better** result than native HDMI 2.1 FRL would have given~~ —
+**retracted 2026-08-06.** It is better than the *4:2:0 workaround* below, which
+is what it was actually compared against: DP + DSC delivers full 4:4:4 10-bit
+where 4:2:0 managed 8-bit with quarter-resolution chroma. Against real FRL it
+loses on every axis — FRL is 12 bpc with no compression at all.
 
 ### VRR does not work through this converter — tested, reverted
 
@@ -393,10 +394,17 @@ wrong theory in this file came from changing one thing and eyeballing the
 result.
 
 (`odm_combine_segments` in debugfs returns `-95` on this kernel — an error code,
-not a reading. The HUBP pipe layout is the reliable source, and `--seam` parses
-it. Careful with the columns by hand: the OTG section labels rows `[0]:` and the
-HUBP section `[ 0]:`, and that one space shifts every awk field — it has now
-produced two wrong readings in this repo.)
+not a reading. Careful with the columns by hand: the OTG section labels rows
+`[0]:` and the HUBP section `[ 0]:`, and that one space shifts every awk field —
+it has now produced three wrong readings in this repo.)
+
+**Correction (2026-08-06): counting HUBPs does not give you the ODM factor.**
+`--status` used to infer "ODM N:1" from the number of active HUBP rows, which
+was only ever right by accident on the converter path. A compositor scanning out
+several planes — game, overlay, cursor — lights several HUBPs with no ODM at
+all, and that is what happens now: three active HUBPs, `ODM Segments 0`, one
+pipe. The authoritative number is the **HPO block's own `ODM Segments` column**,
+which `--status` now reads directly.
 
 ## Desktop mode lands on X11 or Wayland depending on how you get there
 
