@@ -349,6 +349,20 @@ do_install() {
 # one DCN pipe can clock out. Eyeballing the seam is not a measurement; this is.
 DBG_DIR="/sys/kernel/debug/dri/0000:03:00.0"
 
+# Name of the connector currently driving a display, e.g. HDMI-A-1. Matches the
+# debugfs directory names under $DBG_DIR.
+active_connector() {
+    local c n
+    for c in /sys/class/drm/card0-*; do
+        [[ -f "$c/status" ]] || continue
+        [[ "$(cat "$c/status")" == connected ]] || continue
+        n="$(basename "$c")"
+        printf '%s\n' "${n#card0-}"
+        return 0
+    done
+    return 1
+}
+
 do_pipeline() {
     echo
     if [[ $EUID -ne 0 ]]; then
@@ -356,9 +370,14 @@ do_pipeline() {
         return 0
     fi
 
-    local range
-    range="$(tr '\n' ' ' < "$DBG_DIR/DP-1/vrr_range" 2>/dev/null || true)"
+    # Read the connector that is actually lit, not a hardcoded one. This used to
+    # say DP-1, which was right while the DP->HDMI converter was in the chain and
+    # silently reported "unavailable" forever once the native HDMI port took over.
+    local conn range
+    conn="$(active_connector)"
+    range="$(tr '\n' ' ' < "$DBG_DIR/$conn/vrr_range" 2>/dev/null || true)"
     echo "VRR:"
+    printf '  %-24s %s\n' "connector" "${conn:-none connected}"
     printf '  %-24s %s\n' "sink vrr_range" "${range:-unavailable}"
     if [[ "$range" =~ Min:\ 0\ +Max:\ 0 ]]; then
         printf '  %-24s %s\n' "engaged" "no (sink reports no VRR range)"
@@ -570,10 +589,18 @@ do_status() {
     # Compare the live value against whatever the repo config actually asks for,
     # rather than assuming a particular value is the desired one -- that setting
     # has been flipped once already (see modprobe.d/amdgpu-display.conf).
+    #
+    # freesync_pcon_allow_all is a Valve-only parameter: it does not exist in
+    # mainline, so the FRL kernel logs "unknown parameter ... ignored" and
+    # /sys/module/amdgpu/parameters/ has no such file. That is expected and not a
+    # fault -- the parameter only ever gated VRR through the DP->HDMI converter's
+    # PCON, and the converter is out of the chain. Don't warn about it there.
     local want
     want="$(sed -n 's/^options amdgpu .*freesync_pcon_allow_all=\([0-9]\+\).*/\1/p' \
         "$MODPROBE_SRC" | head -1)"
-    if [[ -n "$want" && "$(param freesync_pcon_allow_all)" != "$want" ]]; then
+    if [[ ! -e /sys/module/amdgpu/parameters/freesync_pcon_allow_all ]]; then
+        printf '  %-26s %s\n' "" "(not in this kernel -- Valve-only, PCON path only; harmless)"
+    elif [[ -n "$want" && "$(param freesync_pcon_allow_all)" != "$want" ]]; then
         echo
         warn "config wants freesync_pcon_allow_all=$want but live value is $(param freesync_pcon_allow_all) -- reboot required"
     fi
