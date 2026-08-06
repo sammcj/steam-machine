@@ -327,6 +327,12 @@ do_status() {
         echo
         echo "FRL link state:"
         echo "  dcfeaturemask    : $(cat /sys/module/amdgpu/parameters/dcfeaturemask 2>/dev/null) (1026 == 0x402)"
+        # Worth showing because the VRR patches are hand-ported off an unmerged
+        # posting: if a rebuild silently drops them, this is where it shows.
+        local vrr=/sys/kernel/debug/dri/0/HDMI-A-1/vrr_range
+        if [[ -r $vrr ]]; then
+            echo "  vrr_range        : $(tr '\n' ' ' < "$vrr" | sed 's/  */ /g;s/ $//') (Min: 0 Max: 0 == VRR patches missing)"
+        fi
         local dtn=/sys/kernel/debug/dri/0/amdgpu_dm_dtn_log
         if [[ -r $dtn ]]; then
             # The HPO block is a header, one data row, then a blank line.

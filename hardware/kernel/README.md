@@ -8,6 +8,8 @@ This is strictly better than what the converter delivered: it managed 10 bpc *wi
 
 Full measurement capture, with the raw debugfs output it was read from: [`frl-4k120-evidence.txt`](frl-4k120-evidence.txt).
 
+**HDMI VRR and ALLM work too**, since 2026-08-06 - 40-120 Hz, `vrr_capable 1` - via AMD's unmerged 4-patch series ported onto this build. See [patches/](patches/).
+
 **It survives SteamOS updates** (since 2026-08-06), via a cached artefact tarball under `/home` and a keep-listed systemd unit that reinstalls whatever an A/B update deleted. It is also the **default boot entry**, with a 10-second menu to pick the stock Valve kernel instead. See [Install](#install) and [How it survives updates](#how-it-survives-updates).
 
 ## What was measured
@@ -25,6 +27,7 @@ Full measurement capture, with the raw debugfs output it was read from: [`frl-4k
 | Underflow             | `0h` on every active pipe                                                   |
 | HDR                   | `Colorspace = 9` (`DRM_MODE_COLORIMETRY_BT2020_RGB`) while an HDR game runs |
 | Content type          | `4` (Game) - drives HDMI ALLM                                               |
+| VRR                    | 40-120 Hz, `vrr_capable 1` (added 2026-08-06, see [patches/](patches/))    |
 
 The pixel clock is the proof on its own. 600 MHz is a hard ceiling for TMDS signalling; 1188 MHz is only reachable over FRL. (The DTN log prints the raw OTG registers, which hold total-1 - `dcn10_optc.c` programs `OTG_H_TOTAL = h_total - 1` - so the `4399 × 2249` it shows is the standard CTA-861 4400 × 2250 timing.)
 
@@ -302,9 +305,17 @@ Expect real work: `dc/dml2` was renamed to `dc/dml2_0` in 6.19, and there are ro
 
 The Valve tree is now local. `git log v6.18..6.18.33-drmexec-valve2` against a fetched upstream tag will list exactly what Valve add, which retires the "unexamined" caveat above.
 
-### 4. Apply the four VRR patches (M)
+### 4. Apply the four VRR patches - DONE 2026-08-06
 
-See the VRR gap above for what they are and why they apply to this exact configuration. Reviewed by AMD's own display maintainer, ~200 lines across four patches, and the only in-tree work needed is a signal-type test and an EDID parse - far smaller than the rebase in step 1, and it is the one change that would make the TV's 40-120 Hz VRR usable.
+Kept for the record. See the VRR section above for what they are and why they applied to this exact configuration, and [patches/](patches/) for the ported series. Result: `vrr_range Min: 40 Max: 120`, `vrr_capable 1`, with the link otherwise unchanged.
+
+The thing to re-check periodically is whether they have been merged, since ours are hand-ported off an unmerged posting:
+
+```bash
+cd /home/deck/kernel-frl/build72
+git fetch agd5f amd-staging-drm-next
+git log --oneline FETCH_HEAD -i --grep='HF-VSDB' --grep='ALLM' -- drivers/gpu/drm
+```
 
 The thread mbox is already fetched. Note that `lore.kernel.org` is behind Anubis proof-of-work, so a plain `curl` gets a challenge page; a git user-agent passes:
 

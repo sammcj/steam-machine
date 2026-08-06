@@ -61,7 +61,7 @@ A vertical seam also appeared at 4K120 in that session and was twice blamed on t
 
 Dropped to (L): it would need a different converter, or upstream FRL on a 7.2+ kernel.
 
-**Update 2026-08-06: the converter is no longer in the chain**, so this entry is now history - 4K120 runs over the native HDMI port on a 7.2-rc6 build with FRL. VRR still does not work, but for a different reason: 7.2 shipped FRL *without* HDMI VRR, deliberately (`vrr_range Min: 0 Max: 0`, `vrr_capable 0`). **Resolved 2026-08-06.** Fangzhi Zuo at AMD posted a 4-patch series on 30 July 2026 adding VRR over the FRL path, Reviewed-by Harry Wentland. Unmerged, but hand-ported onto the 7.2-rc6 build and now running: `vrr_range Min: 40 Max: 120`, `vrr_capable 1`. The patches are in [hardware/kernel/patches/](hardware/kernel/patches/). See [hardware/kernel/](hardware/kernel/README.md).
+**Update 2026-08-06: the converter is no longer in the chain**, so this entry is now history - 4K120 runs over the native HDMI port on a 7.2-rc6 build with FRL. VRR did not work on 7.2-rc6 either, for a different reason: 7.2 shipped FRL *without* HDMI VRR, deliberately (`vrr_range Min: 0 Max: 0`, `vrr_capable 0`). **Resolved later the same day.** Fangzhi Zuo at AMD posted a 4-patch series on 30 July 2026 adding VRR over the FRL path, Reviewed-by Harry Wentland. Unmerged, but hand-ported onto the 7.2-rc6 build and now running: `vrr_range Min: 40 Max: 120`, `vrr_capable 1`. The patches are in [hardware/kernel/patches/](hardware/kernel/patches/). See [hardware/kernel/](hardware/kernel/README.md).
 
 #### HDMI CEC (M)
 
