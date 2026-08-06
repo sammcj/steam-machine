@@ -1,6 +1,6 @@
 # Kernel — HDMI 2.1 FRL for 4K120 on the native HDMI port
 
-## Status: working, but as a temporary probe kernel
+## Status: working, persistent, and the default boot entry
 
 **4K 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10, zero underflow — over the GPU's native HDMI port**, on a hand-built mainline **Linux 7.2-rc6**. Achieved 2026-08-06. The UGREEN DP→HDMI converter is out of the chain entirely.
 
@@ -8,7 +8,7 @@ This is strictly better than what the converter delivered: it managed 10 bpc *wi
 
 Full measurement capture, with the raw debugfs output it was read from: [`frl-4k120-evidence.txt`](frl-4k120-evidence.txt).
 
-**It will not survive a SteamOS update.** Everything below lives on the A/B rootfs slot and the per-slot EFI partition, both of which are replaced wholesale. That is deliberate for a probe — see [Making it survive updates](#making-it-survive-updates) for what turning this into a permanent subsystem would take.
+**It survives SteamOS updates** (since 2026-08-06), via a cached artefact tarball under `/home` and a keep-listed systemd unit that reinstalls whatever an A/B update deleted. It is also the **default boot entry**, with a 10-second menu to pick the stock Valve kernel instead. See [Install](#install) and [How it survives updates](#how-it-survives-updates).
 
 ## What was measured
 
