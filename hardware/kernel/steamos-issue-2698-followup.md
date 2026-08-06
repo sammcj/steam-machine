@@ -47,12 +47,4 @@ Uptime on this is hours, not weeks. I haven't measured actual refresh behaviour 
 
 Patches as ported, plus the full debugfs captures: <https://github.com/sammcj/steam-machine/tree/main/hardware/kernel>
 
-Happy to test a candidate neptune build on this hardware - RDNA4 plus a 2019 HDMI 2.1 TV is probably a useful combination to have on the other end of a patch.
-
----
-
-## Notes before posting
-
-- Check the repo URL resolves and that `patches/` and `frl-4k120-evidence.txt` are pushed before linking them.
-- No serials, account IDs, addresses or private hostnames above - keep it that way if you edit it.
-- If they ask for a full `dmesg`, capture it with `drm.debug=0x2` on the FRL kernel: the ported patches carry `drm_dbg_driver()` lines (`VRR: enter ...`, `VRR: HF-VSDB fallback ...`, `ALLM: set mode ...`) which are exactly what a maintainer would want to see. They are silent at the default debug level.
+Happy to test a candidate neptune build on this hardware - RDNA4 plus a 2019 HDMI 2.1 TV is probably a useful combination to have on the other end of a patch. If a verbose log would help, the series carries `drm_dbg_driver()` lines (`VRR: enter ...`, `VRR: HF-VSDB fallback ...`, `ALLM: set mode ...`) that show the whole decision path under `drm.debug=0x2` - say the word and I'll post one.
