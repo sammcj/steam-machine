@@ -221,6 +221,10 @@ Not currently causing a visible problem, but worth being explicit about. Running
 
 Everything else in `config-neptune` is either Steam Deck / handheld hardware that does not exist on an AM5 desktop (Vangogh audio, `MFD_STEAMDECK`, `LTRF216A`, the Lenovo/Asus/Zotac/OneXPlayer/MSI HID drivers) or plain config flags that were carried across by seeding from Valve's config.
 
+## Reported upstream
+
+[ValveSoftware/SteamOS#2698](https://github.com/ValveSoftware/SteamOS/issues/2698) — "SteamOS doesn't support 4k 120hz via HDMI (AMD Radeon RX 9070 XT)". A follow-up comment is drafted at [steamos-issue-2698-followup.md](steamos-issue-2698-followup.md), turning it from a feature request into a scoped backport request: the measurements, the symbol-extraction proof, the exact 7.2 SHAs, and the argument that it costs Valve nothing to ship — upstream keeps FRL disabled by default, so carrying the code changes nothing for any existing user or Deck.
+
 ## Next steps
 
 ### 1. Rebase onto Valve's kernel rather than running mainline (H)
