@@ -263,7 +263,7 @@ In order: let `set fallback` boot the stock kernel by itself → wait out the 10
 
 `--uninstall` refuses to run while the FRL kernel is the running kernel, and refuses to *start* if the stock kernel is missing from `grub.cfg`.
 
-There is also a **fallback-initramfs entry** (`frl-probe-fallback`), which boots the same kernel with the no-autodetect image. The preset built that image either way; before this it was 20 MB that nothing could reach.
+There is also a **fallback-initramfs entry** (`frl-probe-fallback`), which boots the same kernel from the second image the preset builds. On SteamOS that image is a byte-identical *copy* of the default one, not the usual all-modules superset: `fallback_options="-S autodetect"` skips a hook that is not in HOOKS to begin with, because `/etc/mkinitcpio.conf.d/20-steamdeck.conf` replaces the list and omits `autodetect`. So it is insurance against a corrupted or truncated image, not against a missing module. The preset built it either way; before this entry existed it was 20 MB that nothing could reach.
 
 ## Gaps
 
@@ -322,7 +322,19 @@ The registers store total-1, so `vmax 6749` is a vtotal of 6750. At the fixed 11
 
 What this does *not* prove is the sink side: nothing here confirms the C9 is tracking the varying rate rather than ignoring it, and `content type 4` for ALLM is a source-side property, not proof the TV switched to game mode. The TV's own **Instant Game Response** indicator is the check that would close both, and it has not been done.
 
-Also worth taking regardless of VRR: `drm/amd/display: restore FRL cap on non-destructive HDMI link verify` (August archive), without which an FRL link can collapse back to TMDS across a hotplug.
+### Keeping FRL across a hotplug
+
+`drm/amd/display: restore FRL cap on non-destructive HDMI link verify` — **applied as patch `0006`.** Also Fangzhi Zuo's, also Reviewed-by Harry Wentland, and since picked into Tom Chung's "DC Patches Aug 10 2026" as 31/34, so it is on the merge path and can be dropped at the next rebase.
+
+It is one line, and it matters more here than upstream framing suggests. `verify_link_capability_non_destructive()` assigned the *DP* `verified_link_cap` on the HDMI branch and left `frl_verified_link_cap` stale, so `frl_link_rate` read back as `HDMI_FRL_LINK_RATE_DISABLE` and the stream collapsed to TMDS:
+
+```c
+	} else if (dc_is_hdmi_signal(link->local_sink->sink_signal)) {
+-		link->verified_link_cap = link->reported_link_cap;
++		link->frl_verified_link_cap = link->frl_reported_link_cap;
+```
+
+Switching a TV off and on is a routine HPD event on a living-room machine, so this is a path that gets exercised daily here. And because `amdgpu_dm_update_freesync_caps()` keys on `SIGNAL_TYPE_HDMI_FRL`, a collapse to `SIGNAL_TYPE_HDMI_TYPE_A` silently takes **VRR** with it — the symptom is a drop to 4K60 with no error logged anywhere and `--status` still reporting everything installed.
 
 ### The probe kernel is mainline, so Valve's patches are gone (M)
 

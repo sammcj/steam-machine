@@ -13,4 +13,10 @@ PRESETS=('default' 'fallback')
 default_image="/boot/frl/initramfs-linux-frlprobe.img"
 
 fallback_image="/boot/frl/initramfs-linux-frlprobe-fallback.img"
+# On a normal Arch box this makes the fallback image carry every module instead
+# of only the ones autodetect found in use. On SteamOS it is a no-op:
+# /etc/mkinitcpio.conf.d/20-steamdeck.conf REPLACES HOOKS with a list containing
+# no `autodetect`, so the default image already has everything and the two
+# images come out byte-identical (checked with md5sum). Kept anyway -- a second
+# physical copy is still worth 20 MB against a truncated or corrupted default.
 fallback_options="-S autodetect"

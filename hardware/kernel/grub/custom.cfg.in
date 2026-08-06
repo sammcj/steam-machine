@@ -32,9 +32,20 @@ menuentry 'SteamOS -- 4K120 HDMI (mainline kernel, HDMI 2.1 FRL)' --class steamo
 	initrd	/boot/amd-ucode.img /boot/frl/initramfs-linux-frlprobe.img
 }
 
-# The preset builds a fallback initramfs (no autodetect, every module included).
-# Without an entry it is 20 MB of dead weight; with one it is the first thing to
-# try when the default entry boots to a hang rather than failing outright.
+# The preset builds a second initramfs, and it is worth knowing exactly what it
+# is here: a byte-identical COPY of the default one, not a superset.
+#
+# `fallback_options="-S autodetect"` skips the autodetect hook, which on a normal
+# Arch box is what makes the fallback image carry every module rather than only
+# the ones in use. SteamOS drops in /etc/mkinitcpio.conf.d/20-steamdeck.conf,
+# which REPLACES HOOKS with a list that has no `autodetect` in it -- so the
+# default image already contains everything and -S skips a hook that never ran.
+# Verified by md5: both images match.
+#
+# That still leaves it useful, just for a different reason than usual: it is a
+# second physical copy, so a truncated or corrupted default image (an interrupted
+# mkinitcpio, a full /boot) has something to fall back to. It is not insurance
+# against a missing module.
 menuentry 'SteamOS -- 4K120 HDMI (mainline kernel, fallback initramfs)' --class steamos --class gnu-linux --class gnu --class os --id @MENU_ID@-fallback {
 	load_video
 	set gfxpayload=$linux_gfx_mode
