@@ -310,7 +310,17 @@ The thread mbox is fetchable from lore (Anubis blocks a plain `curl`; a git user
 
 **Why patch 3/4 is the one that mattered here.** The C9's EDID has **no AMD VSDB at all** - no FreeSync block. Every pre-series kernel derived HDMI FreeSync capability solely from that block, so this TV could never report VRR, on FRL or through the converter. Its HDMI Forum VSDB does carry `VRRmin: 40 Hz`, `VRRmax: 120 Hz` and `Supports Auto Low-Latency Mode`, and 3/4 is exactly the fallback that reads them. Patch 1/4 alone would have done nothing on this display.
 
-Confirmation that the timing generator followed: the DTN log's OTG row now shows `vmax 4500 vmin 4500` with `vmax_sel`/`vmin_sel` both `1`. Both selectors read `0` on every earlier kernel - dynamic vtotal was available the whole time and simply never armed.
+Confirmation that the timing generator followed, and that it is genuinely *variable* rather than merely enabled. `vmax_sel`/`vmin_sel` read `0` on every earlier kernel — dynamic vtotal was reachable on the FRL path the whole time and simply never armed. They now read `1`, and the bounds move with what the compositor asks for:
+
+```
+OTG:  ... vmax  vmin  vmax_sel  vmin_sel  ...  htot  vtot ...
+[0]:  ... 6749  2249         1         1  ...  4399  2249     <- VRR active
+[0]:  ... 4499  4499         1         1  ...  4399  2249     <- fixed 60 Hz
+```
+
+The registers store total-1, so `vmax 6749` is a vtotal of 6750. At the fixed 1188.00 MHz pixel clock and `htotal` 4400 that is `1188000000 / (4400 x 6750)` = **40.00 Hz**, and `vmin 2249` → 2250 → **120.00 Hz**. The hardware is armed over exactly the 40–120 Hz window the C9's HF-VSDB advertises. The second row is the same driver state clamped to one rate (`VRR_STATE_ACTIVE_FIXED`, both bounds at 4500 = 60.00 Hz), which is what a static desktop settles into — reading only that row would understate what is going on.
+
+What this does *not* prove is the sink side: nothing here confirms the C9 is tracking the varying rate rather than ignoring it, and `content type 4` for ALLM is a source-side property, not proof the TV switched to game mode. The TV's own **Instant Game Response** indicator is the check that would close both, and it has not been done.
 
 Also worth taking regardless of VRR: `drm/amd/display: restore FRL cap on non-destructive HDMI link verify` (August archive), without which an FRL link can collapse back to TMDS across a hotplug.
 
