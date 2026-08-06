@@ -64,6 +64,13 @@ Every article says to boot with `amdgpu.dc_feature_mask=0x400`. That is wrong tw
 
 Reproducible from scratch. The whole thing took about two hours, most of it unattended compile time.
 
+Everything the kernel carries on top of stock mainline is in [patches/](patches/) as `git format-patch` output, with provenance for each. Applying them in order onto a clean `v7.2-rc6` reproduces the running kernel:
+
+```bash
+git checkout -b frl-rebuild v7.2-rc6
+git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
+```
+
 ### 1. Get Valve's source tree
 
 Valve's kernel git is at `gitlab.steamos.cloud/jupiter/linux-integration`, but anonymous HTTPS git returns 403 and the web UI is behind Anubis. The PKGBUILD's `source=` is `git+ssh://`, which needs credentials.

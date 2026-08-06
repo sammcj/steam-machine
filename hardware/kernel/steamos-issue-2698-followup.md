@@ -1,12 +1,14 @@
 # Follow-up for ValveSoftware/SteamOS#2698
 
-Draft comment for <https://github.com/ValveSoftware/SteamOS/issues/2698> - "SteamOS doesn't support 4k 120hz via HDMI (AMD Radeon RX 9070 XT)".
+https://github.com/ValveSoftware/SteamOS/issues/2698 - "SteamOS doesn't support 4k 120hz via HDMI (AMD Radeon RX 9070 XT)".
 
 ---
 
 ## Making it work with a recent kernel
 
 I've got this working on a hand-built kernel, so here are the specifics in case they're useful.
+
+_Note: the below content is heavily written by Claude Opus 5, so it's a bit verbose sorry._
 
 FRL for DCN 4.0.1 landed in the 7.2 merge window. SteamOS 3.8.24 ships `linux-neptune-616-drm-exec` 6.16.12, so the code isn't present.
 

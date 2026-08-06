@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steam-machine <deck@localhost>
+Date: Thu, 6 Aug 2026 15:00:39 +1000
+Subject: [PATCH] amdgpu_dm: build with -DAMD_PRIVATE_COLOR for gamescope HDR
+ offload
+
+---
+ drivers/gpu/drm/amd/display/amdgpu_dm/Makefile | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/display/amdgpu_dm/Makefile b/drivers/gpu/drm/amd/display/amdgpu_dm/Makefile
+index 54a93e4255b3..d0656c8289fb 100644
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/Makefile
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/Makefile
+@@ -55,6 +55,14 @@ endif
+ 
+ subdir-ccflags-y += -I$(FULL_AMD_DISPLAY_PATH)/dc
+ 
++# Expose the AMD driver-private per-plane colour management properties
++# (AMD_PLANE_DEGAMMA_TF, SHAPER_LUT, LUT3D, BLEND_TF, CTM, HDR_MULT, ...).
++# gamescope's drm_supports_color_mgmt() checks for AMD_PLANE_CTM and
++# AMD_PLANE_BLEND_TF to offload HDR colour management onto DCN hardware;
++# without them it falls back to Vulkan shader composition. SteamOS ships
++# the equivalent downstream as CONFIG_DRM_AMD_COLOR_STEAMDECK.
++subdir-ccflags-y += -DAMD_PRIVATE_COLOR
++
+ AMDGPU_DM = $(addprefix $(AMDDALPATH)/amdgpu_dm/,$(AMDGPUDM))
+ 
+ AMD_DISPLAY_FILES += $(AMDGPU_DM)

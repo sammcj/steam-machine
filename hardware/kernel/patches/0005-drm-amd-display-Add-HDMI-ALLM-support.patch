@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sam McLeod <not@telling.github.com>
+Date: Thu, 6 Aug 2026 17:49:38 +1000
+Subject: [PATCH] drm/amd/display: Add HDMI ALLM support
+
+From: Fangzhi Zuo <Jerry.Zuo@amd.com>
+Upstream posting: https://lore.kernel.org/amd-gfx/20260730171754.704049-1-jerry.zuo@amd.com/
+
+Hand-ported to v7.2-rc6: the amdgpu_dm_connector.c hunk was applied to
+create_stream_for_sink() in amdgpu_dm.c.
+
+NOTE: applied as posted. Harry Wentland's review asked for the ALLM bit to be
+read from aconn->base.display_info.hdmi.allm rather than adding a new field to
+dc_edid_caps, which would drop the dc_types.h and amdgpu_dm_helpers.c hunks.
+That rework is not done here -- if a v2 is posted upstream, take that instead.
+---
+ .../gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c | 53 +++++++++++++++++--
+ .../amd/display/amdgpu_dm/amdgpu_dm_helpers.c |  5 +-
+ drivers/gpu/drm/amd/display/dc/dc_types.h     |  3 ++
+ 3 files changed, 57 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c
+index e5d3d321fb2a..19f31bb82c65 100644
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm.c
+@@ -7740,8 +7740,22 @@ create_stream_for_sink(struct drm_connector *connector,
+ 	update_stream_signal(stream, sink);
+ 
+ 	if (stream->signal == SIGNAL_TYPE_HDMI_TYPE_A ||
+-	    stream->signal == SIGNAL_TYPE_HDMI_FRL)
+-		mod_build_hf_vsif_infopacket(stream, &stream->vsp_infopacket, false, false);
++	    stream->signal == SIGNAL_TYPE_HDMI_FRL) {
++		/*
++		 * Enable HDMI ALLM (Auto Low-Latency Mode) when the sink
++		 * advertises ALLM in the SCDS and the content type is Game.
++		 * Setting content-type = Game is how userspace requests the
++		 * Sink's low-latency mode (HDMI GCTS HF1-56).
++		 */
++		bool allm = sink->edid_caps.allm &&
++			stream->content_type == DISPLAY_CONTENT_TYPE_GAME;
++
++		drm_dbg_driver(dev,
++			       "ALLM: set mode: sink_allm=%d content_type=%d -> ALLM_Mode=%d\n",
++			    sink->edid_caps.allm, stream->content_type, allm);
++
++		mod_build_hf_vsif_infopacket(stream, &stream->vsp_infopacket, allm, allm);
++	}
+ 
+ 	if (stream->signal == SIGNAL_TYPE_DISPLAY_PORT ||
+ 	    stream->signal == SIGNAL_TYPE_DISPLAY_PORT_MST ||
+@@ -9992,6 +10006,36 @@ static void update_freesync_state_on_stream(
+ 	new_stream->vrr_infopacket = vrr_infopacket;
+ 	new_stream->allow_freesync = mod_freesync_get_freesync_enabled(&vrr_params);
+ 
++	/*
++	 * HDMI ALLM: transmit the HF-VSIF with ALLM_Mode=1 when the sink
++	 * advertises ALLM in the SCDS and either the content type is Game
++	 * (HF1-56) or Gaming-VRR is active (VRR_EN=1, HF1-58 step 8.3.1).
++	 * HDMI 2.1 7.6.6.
++	 */
++	if (new_stream->signal == SIGNAL_TYPE_HDMI_TYPE_A ||
++	    new_stream->signal == SIGNAL_TYPE_HDMI_FRL) {
++		struct dc_info_packet vsp_infopacket = {0};
++		bool allm = new_stream->sink->edid_caps.allm &&
++			(new_stream->content_type == DISPLAY_CONTENT_TYPE_GAME ||
++			 vrr_params.state == VRR_STATE_ACTIVE_VARIABLE ||
++			 vrr_params.state == VRR_STATE_ACTIVE_FIXED);
++		bool allm_changed;
++
++		mod_build_hf_vsif_infopacket(new_stream, &vsp_infopacket, allm, allm);
++
++		allm_changed = memcmp(&new_stream->vsp_infopacket, &vsp_infopacket,
++				      sizeof(vsp_infopacket)) != 0;
++		new_crtc_state->freesync_vrr_info_changed |= allm_changed;
++		new_stream->vsp_infopacket = vsp_infopacket;
++
++		if (allm_changed)
++			drm_dbg_driver(adev_to_drm(adev),
++				       "ALLM: flip on crtc=%u: sink_allm=%d content_type=%d vrr_state=%d -> ALLM_Mode=%d\n",
++				    new_crtc_state->base.crtc->base.id,
++				    new_stream->sink->edid_caps.allm,
++				    new_stream->content_type, vrr_params.state, allm);
++	}
++
+ 	if (new_crtc_state->freesync_vrr_info_changed)
+ 		drm_dbg_kms(adev_to_drm(adev), "VRR packet update: crtc=%u enabled=%d state=%d",
+ 			      new_crtc_state->base.crtc->base.id,
+@@ -10558,9 +10602,12 @@ static void amdgpu_dm_commit_planes(struct drm_atomic_commit *state,
+ 		}
+ 
+ 		if (acrtc_state->stream) {
+-			if (acrtc_state->freesync_vrr_info_changed)
++			if (acrtc_state->freesync_vrr_info_changed) {
+ 				bundle->stream_update.vrr_infopacket =
+ 					&acrtc_state->stream->vrr_infopacket;
++				bundle->stream_update.vsp_infopacket =
++					&acrtc_state->stream->vsp_infopacket;
++			}
+ 		}
+ 	}
+ 
+diff --git a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_helpers.c b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_helpers.c
+index 6be7f6edd0b2..41bb6f893d7c 100644
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_helpers.c
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_helpers.c
+@@ -183,7 +183,10 @@ enum dc_edid_status dm_helpers_parse_edid_caps(
+ 				  edid_caps->display_name,
+ 				  AUDIO_INFO_DISPLAY_NAME_SIZE_IN_CHARS);
+ 
+-	edid_caps->edid_hdmi = connector->display_info.is_hdmi;
++	if (connector->display_info.is_hdmi) {
++		edid_caps->edid_hdmi = true;
++		edid_caps->allm = connector->display_info.hdmi.allm;
++	}
+ 
+ 	if (edid_caps->edid_hdmi) {
+ 		populate_hdmi_info_from_connector(link->dc->config.enable_frl, &connector->display_info.hdmi, edid_caps);
+diff --git a/drivers/gpu/drm/amd/display/dc/dc_types.h b/drivers/gpu/drm/amd/display/dc/dc_types.h
+index 4ed1efa17270..aade3a79c988 100644
+--- a/drivers/gpu/drm/amd/display/dc/dc_types.h
++++ b/drivers/gpu/drm/amd/display/dc/dc_types.h
+@@ -224,6 +224,9 @@ struct dc_edid_caps {
+ 	/*HDMI 2.0 caps*/
+ 	bool lte_340mcsc_scramble;
+ 
++	/* HDMI 2.1 caps */
++	bool allm;
++
+ 	bool edid_hdmi;
+ 	bool hdr_supported;
+ 	bool rr_capable;
