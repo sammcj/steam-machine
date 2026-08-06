@@ -12,6 +12,8 @@ Full measurement capture, with the raw debugfs output it was read from: [`frl-4k
 
 **It survives SteamOS updates** (since 2026-08-06), via a cached artefact tarball under `/home` and a keep-listed systemd unit that reinstalls whatever an A/B update deleted. It is also the **default boot entry**, with a 10-second menu to pick the stock Valve kernel instead. See [Install](#install) and [How it survives updates](#how-it-survives-updates).
 
+> **Known problem: the machine does not power off.** Two for two on 2026-08-06 and 07 — Steam → Shutdown completes the whole systemd sequence and then hangs before S5, needing a 4-second power-button hold. Reboots are fine. Open, cause not established, correlates with the VRR patches. Read [OPEN: power-off hangs](#open-power-off-hangs-2026-08-06-2026-08-07) before using this daily.
+
 ## TL;DR
 
 Everything below this section is the reasoning. If you just want it working:
@@ -535,13 +537,15 @@ Specifically, be aware that:
 - **7.2-rc6 is a release candidate.** It gets no stable or CVE fixes. Rebuild at 7.2 final.
 - **You lose Valve's kernel patches** while running it. See [the gap](#the-probe-kernel-is-mainline-so-valves-patches-are-gone-m) for what that costs on a desktop.
 - **A SteamOS update leaves you on the stock kernel for one boot.** Expected, not a fault - see [After a SteamOS update](#after-a-steamos-update).
-- **One hung power-off, 2026-08-06.** See below. Not reproduced since, cause not established.
+- **Power-off hangs. OPEN, and the most serious known problem with this kernel.** Two for two so far. See below.
 
-### A hung power-off, observed once (2026-08-06)
+### OPEN: power-off hangs (2026-08-06, 2026-08-07)
 
-After a ~3.5 hour gaming session, Steam → Shutdown ran the full sequence and then the machine never actually powered off. It sat with the fans and lights on, no network, and a short press of the power button did nothing; it took a 4-second hold to force it off.
+**Symptom.** Steam → Shutdown runs the full sequence and then the machine never actually powers off. Fans and lights stay on, there is no network, the display outputs a black frame, and a short press of the power button does nothing. Only a 4-second hold clears it. **Reboots are unaffected** — those have worked every time.
 
-What the logs establish:
+Seen twice, on consecutive nights. Both hangs are identical in the logs.
+
+What the logs establish, identically for both:
 
 | Evidence | What it rules in or out |
 |---|---|
@@ -551,12 +555,83 @@ What the logs establish:
 | `ramoops` is registered and `/sys/fs/pstore` is **empty** | no panic and no oops was captured, so this was a hang rather than a crash |
 | `/sys/class/net/enp9s0/device/power/wakeup` = `enabled` | WoL was armed; its failing to wake the machine is a symptom, not a misconfiguration |
 
-Read together: systemd finished, then the kernel wedged in the final power-off and the machine never reached S5. That accounts for all three symptoms at once - lights on because it never powered down, no SSH because the network stack was gone, and a dead power button because the kernel was past the point where it handles ACPI events. The WoL packet had nothing to wake.
+Read together: systemd finished, then the kernel wedged in the final power-off and the machine never reached S5. That accounts for every symptom at once - lights on because it never powered down, no SSH because the network stack was gone, a black frame because the display was already torn down, and a dead power button because the kernel was past the point where it handles ACPI events. On the first occurrence a Wake-on-LAN packet was sent during the hang and did nothing, which fits: the NIC was still in its normal running state, not in WoL standby.
 
-The alternative - that it did reach S5, WoL woke it, and it hung before journald started - would need a hang in GRUB or very early kernel that then did not recur on the hard power-on 27 minutes later with nothing changed. Possible, not likely.
+#### What the second occurrence ruled out
 
-**Not attributed to any specific patch.** It happened on the `0002`-`0005` build, before `0006` existed. Two things cannot be excluded: the modules under `/usr/lib/modules/` had been replaced while that kernel was running earlier the same day (unlikely to matter - `CONFIG_MODVERSIONS` is off and module symbols resolve at load time), and it was the first long real-world session on the VRR-patched display driver.
+The first hang followed a ~3.5 hour gaming session, so load and session length looked like the obvious variables. **They are not.** The second followed a 37-minute desktop session with no game running at all. Also dead: the theory that replacing `/usr/lib/modules/` under the running kernel caused it - that had happened before the first hang and not before the second.
 
-**If it happens again**, capture it rather than power-cycling blind: leave the TV **on** through the shutdown so a panic or a stuck task is visible on the console, and check `/sys/fs/pstore` on the next boot. Removing `quiet splash` from the FRL entry in `custom.cfg` makes the shutdown messages readable.
+#### What it correlates with
+
+`wtmp` gives a clean history of every power-off on this kernel:
+
+| When | Kernel | Result |
+|---|---|---|
+| 17:39 → 17:40 | FRL, pre-VRR | powered off (1 min) |
+| 17:59 → 18:02 | FRL, pre-VRR | powered off (2 min) |
+| 21:45 → 22:12 | FRL + VRR (`0002`-`0005`) | **hung** |
+| 22:48 → 08:07 | FRL + VRR + `0006` | **hung** |
+
+Two clean power-offs before the VRR series, two hangs after. `n` is small and this is a correlation, not a mechanism - but it is the sharpest signal available and it points at `0002`-`0005` rather than at `0006` or at FRL itself.
+
+A second, independent hint points the same way: in **both** hangs the last meaningful kernel messages are `HDR SB:` infopacket dumps, logged immediately after the final BTRFS unmount. That print is upstream (`88694af9e4d1`), not one of these patches, but it shows the HDR metadata path is being written to during display teardown at exactly the moment things stop - and `0003`/`0005` add VTEM and HF-VSIF infopacket handling on that same path.
+
+#### The A/B test that would settle it
+
+The pre-VRR artefact is still cached, so this is one reboot each way:
+
+```bash
+# to the pre-VRR kernel (4K120, no VRR)
+cp ~/.cache/frl-kernel/kernel.tar.zst.pre-vrr ~/.cache/frl-kernel/kernel.tar.zst
+sudo ./install.sh --install && reboot
+# then: Steam -> Shutdown, and see whether it powers off
+
+# back again
+cp ~/.cache/frl-kernel/kernel.tar.zst.pre-frlrestore ~/.cache/frl-kernel/kernel.tar.zst
+sudo ./install.sh --install
+```
+
+Worth doing the **stock Valve kernel** first, though - one arrow-key up in the GRUB menu, no install step, and it establishes whether power-off works at all on this hardware and firmware. If the stock 6.16 kernel hangs too, none of the above matters and this is a board or firmware problem, not a patch problem.
+
+#### Capturing the next one
+
+Power-cycling blind loses the evidence. Before the next shutdown:
+
+**No rebuild is needed for any of this** - the debug knobs are already compiled in, inherited from Valve's config: `PM_DEBUG=y`, `PM_TRACE=y`, `PM_TRACE_RTC=y`, `MAGIC_SYSRQ=y`, `DETECT_HUNG_TASK=y`, `PSTORE_RAM=m`.
+
+- Leave the **TV on** through it, so a panic or a stuck task is readable on the console.
+- Drop `quiet splash` from the FRL entry's command line in `grub/custom.cfg.in` and re-run `--install`, so shutdown messages are not hidden behind plymouth.
+- Add `sysrq_always_enabled=1`, then at the hang use **Alt+SysRq+W** (blocked tasks) and **Alt+SysRq+T** (all tasks) - `ramoops` is armed and will carry the output across the reboot.
+- Check `/sys/fs/pstore` on the next boot. It has been **empty both times**, which is why this is classed as a hang rather than a panic.
+
+### Kernel config: what came from Valve and what did not
+
+The config is **seeded from Valve's**, not from `defconfig` - their `.config` at `/usr/lib/modules/<stock-kver>/build/.config` run through `make olddefconfig` against the 7.2 tree. Verified by diffing the two configs rather than by trusting this file. To re-check after any rebase:
+
+```bash
+diff <(sort /usr/lib/modules/6.16.12-*/build/.config) <(sort /home/deck/kernel-frl/build72/.config)
+```
+
+**Nothing is baked into the kernel image.** `CONFIG_CMDLINE` is unset in both, so every parameter comes from the GRUB entry - which is Valve's stock command line, minus `ttm.pages_min` (a Valve-only `ttm` parameter mainline ignores) and plus `amdgpu.dcfeaturemask=0x402`.
+
+**Everything that matters carried over**: the full cgroup/BPF/io_uring set, `NTSYNC=m`, `SCHED_CLASS_EXT=y`, `DEBUG_INFO_BTF=y`, `HZ=1000`, `PREEMPT_DYNAMIC`, all the filesystems, `X86_AMD_PSTATE=y`, and every core PM/ACPI option - `SUSPEND`, `PM_SLEEP`, `ACPI_SLEEP`, `CPU_IDLE` all `y`. **No power-management option was lost**, which is why the config is not a candidate explanation for the power-off hang above.
+
+230 options differ. Sorted by whether they matter:
+
+| Category | Count | Notes |
+|---|---|---|
+| 6.16 → 7.2 churn | ~200 | Renamed or reorganised symbols - the `CRYPTO_*` library reshuffle, `ARCH_HAS_*`, `GENERIC_VDSO_*`, `X86_64_SMP`, `FTRACE_MCOUNT_RECORD`, `ZPOOL` folding into zswap. Not losses. |
+| Hardware nobody has | ~25 | ATM, ISDN/mISDN, PCMCIA, HAMRADIO/AX25, WIZNET, InfiniBand. |
+| Steam Deck handheld drivers | 5 | `MFD_STEAMDECK`, `LEDS_STEAMDECK`, `EXTCON_STEAMDECK`, `SENSORS_STEAMDECK` - Valve out-of-tree, absent from mainline, meaningless on a desktop. These are exactly the modules `mkinitcpio` complains about on every run. |
+| Deliberate | 1 | `DRM_AMD_COLOR_STEAMDECK`, replaced by the `-DAMD_PRIVATE_COLOR` Makefile line in patch `0001`. |
+
+**Genuine losses worth knowing about**, small but real:
+
+- **`JOYSTICK_XBOX_GIP`** (plus `_FF`, `_LEDS`) - Xbox wireless controllers via the GIP dongle. Moot here (this machine uses a DualSense) but it is a real gaming regression if that ever changes.
+- `LEDS_VALVE`, `HID_ASUS_ALLY`, `HID_MSI`, `ZOTAC_ZONE_*` - other vendors' handheld hardware.
+- `ANDROID_BINDER_IPC` / `ANDROID_BINDERFS` - waydroid would not work.
+- `BCACHEFS_FS`, `PCI_PWRCTRL`, `PCI_PWRCTRL_SLOT`.
+
+Any of these can be turned back on with `make menuconfig` before a rebuild; none was a deliberate choice, they simply are not in mainline's `olddefconfig` answer.
 
 The design assumes the display is the machine's only console, so a failed modeset would otherwise be a lockout. Three things make that survivable, and `install.sh` sets all of them up: `grub.cfg` is never modified, the whole FRL boot path is one file that GRUB simply skips if absent, and `set fallback` boots the stock Valve kernel automatically if the FRL entry cannot load. Before rebooting into any newly built kernel, confirm `sudo ./install.sh --status` reports `grub.cfg is stock : yes`. See the same warning in [hardware/display/](../display/README.md).
