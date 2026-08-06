@@ -1,0 +1,22 @@
+[Unit]
+Description=Reinstall the HDMI 2.1 FRL kernel if a SteamOS update removed it
+Documentation=file:///home/deck/git/steam-machine/hardware/kernel/README.md
+# /home holds both the repo and the cached kernel tarball, so nothing can run
+# before it is mounted.
+RequiresMountsFor=/home /boot /efi
+After=local-fs.target
+ConditionPathExists=/home/deck/git/steam-machine/hardware/kernel/install.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/kernel/install.sh --boot
+# Restoring ~180 MB of modules and running mkinitcpio twice takes a while on a
+# cold cache; the default 90s is not enough.
+TimeoutStartSec=600
+# A failure here must never block boot -- the machine is on the stock Valve
+# kernel at this point and stays perfectly usable without the FRL one.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

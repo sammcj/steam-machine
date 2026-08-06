@@ -1,0 +1,16 @@
+# mkinitcpio preset for the hand-built mainline kernel with HDMI 2.1 FRL.
+# Installed to /etc/mkinitcpio.d/ by hardware/kernel/install.sh.
+#
+# Everything lives in /boot/frl/ rather than /boot/ on purpose: GRUB's 10_linux
+# globs `/boot/vmlinuz-*` and is not recursive, so keeping the kernel one level
+# down means the generated grub.cfg stays byte-for-byte stock and cannot be
+# affected by this kernel at all. See ../grub/custom.cfg.in.
+
+ALL_kver="/boot/frl/vmlinuz-linux-frlprobe"
+
+PRESETS=('default' 'fallback')
+
+default_image="/boot/frl/initramfs-linux-frlprobe.img"
+
+fallback_image="/boot/frl/initramfs-linux-frlprobe-fallback.img"
+fallback_options="-S autodetect"
