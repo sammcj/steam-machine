@@ -12,6 +12,41 @@ Full measurement capture, with the raw debugfs output it was read from: [`frl-4k
 
 **It survives SteamOS updates** (since 2026-08-06), via a cached artefact tarball under `/home` and a keep-listed systemd unit that reinstalls whatever an A/B update deleted. It is also the **default boot entry**, with a 10-second menu to pick the stock Valve kernel instead. See [Install](#install) and [How it survives updates](#how-it-survives-updates).
 
+## TL;DR
+
+Everything below this section is the reasoning. If you just want it working:
+
+**You need this if** you have an RDNA4 Radeon (RX 9000 series) on SteamOS, a HDMI 2.1 display, and the HDMI port refuses anything above 4K60. No Valve kernel has native FRL, so no setting fixes it - it needs a different kernel.
+
+**Do not skip the boot-safety parts if your only display is a TV.** A kernel that fails to modeset with no second monitor is a lockout.
+
+1. **Get the sources** - Valve's kernel src package (for the config), and mainline `v7.2-rc6` fetched into the same repo. [Details](#1-get-valves-source-tree).
+2. **Apply the patches** - all five are in [patches/](patches/) with provenance:
+   ```bash
+   git checkout -b frl v7.2-rc6
+   git am /path/to/hardware/kernel/patches/*.patch
+   ```
+   `0001` keeps gamescope's HDR offload working on a non-Valve kernel. `0002`-`0005` are AMD's unmerged VRR/ALLM series - skip them if you only want 120 Hz, but then you get FRL without VRR.
+3. **Build it**, seeding the config from Valve's so you keep what SteamOS depends on. Needs a container; the rootfs is read-only and has no `bc`/`flex`/`bison`. ~25 min on a 9800X3D. [Details](#3-config-and-build).
+4. **Rebuild any out-of-tree modules** you rely on - here that is `it87` (fan/temp) and `btusb_mt7902` (Bluetooth). [Details](#4-out-of-tree-modules).
+5. **Install:**
+   ```bash
+   sudo ./install.sh --cache     # pack the built kernel into ~/.cache/frl-kernel
+   sudo ./install.sh --install   # deploy, initramfs, boot entry, self-heal service
+   ```
+6. **Reboot.** A 10-second menu appears with the FRL entry preselected; the stock Valve kernel is one arrow-key away and boots automatically if the FRL entry can't load.
+7. **Check it:**
+   ```bash
+   sudo ./install.sh --status
+   ```
+   Want: `vrr_range : Min: 40 Max: 120`, `grub.cfg is stock : yes`, and an `HPO` line ending `ACTIVE 3840 560`.
+
+**The one non-obvious setting:** the kernel parameter is `amdgpu.dcfeaturemask=0x402`, not the `dc_feature_mask=0x400` every guide on the web quotes. Both halves of that matter - [why](#two-traps-in-the-widely-quoted-incantation).
+
+**To undo it all:** boot the stock kernel from the menu, then `sudo ./install.sh --uninstall`.
+
+**After a SteamOS update:** nothing, it repairs itself - but [read this](#after-a-steamos-update) for what to expect and how to check.
+
 ## What was measured
 
 |                       |                                                                             |
@@ -346,6 +381,43 @@ So the chain is:
 You lose the FRL kernel for exactly one boot after an update. Making that zero would mean writing to the *inactive* slot before the swap, which is far more machinery than the problem deserves.
 
 `install.sh --boot` checks every component independently and exits in about 20 ms when they are all present, so it costs nothing on a normal boot. The unit is `Type=oneshot` with `SuccessExitStatus=0 1`, so a failure can never block boot - the machine is on the stock kernel at that point and is perfectly usable without this.
+
+### After a SteamOS update
+
+**Required steps: none.** The repair is automatic. What to expect, and how to confirm it worked:
+
+1. **The first boot after the update is on the stock Valve kernel**, at 4K60. That is normal and unavoidable - the update destroyed the FRL kernel, and the repair runs *during* that boot. Do not go looking for a fault yet.
+2. **Reboot once more.** The FRL entry is back and is the default again. If you are not in a hurry you can ignore this - the next normal reboot picks it up.
+3. **Confirm:**
+   ```bash
+   sudo ~/git/steam-machine/hardware/kernel/install.sh --status
+   ```
+   Every line should read `yes`, `grub.cfg is stock : yes`, and the link state block should be present with `vrr_range : Min: 40 Max: 120`.
+
+If step 2 does not bring it back, the self-heal did not run or did not finish. Check it, then run it by hand - it is idempotent and safe to repeat:
+
+```bash
+systemctl status steam-machine-kernel.service
+journalctl -b -u steam-machine-kernel.service
+sudo ~/git/steam-machine/hardware/kernel/install.sh --boot
+```
+
+Three things break the self-heal, all of them things *you* would have had to do:
+
+- **Moving or deleting `~/git/steam-machine`.** The unit's `ExecStart` is an absolute path into it, guarded by `ConditionPathExists`, so the unit silently does nothing rather than failing loudly. Re-run `sudo ./install.sh --install` from the new location.
+- **Deleting `~/.cache/frl-kernel/`.** That tarball *is* the kernel; nothing else on the machine has a copy. Without it you are rebuilding from [patches/](patches/).
+- **A full rootfs.** The restore needs ~200 MB on `/`, which has under 800 MB free. `--boot` fails cleanly and leaves you on the stock kernel rather than half-installed.
+
+**One thing worth checking after a *major* SteamOS release** (3.9, say), rather than a point update: whether Valve have shipped a kernel with native FRL themselves. If they have, all of this becomes unnecessary - `sudo ./install.sh --uninstall` and go back to stock.
+
+```bash
+# does the stock Valve kernel have the native FRL encoder yet?
+k=$(ls /usr/lib/modules | rg neptune | head -1)
+zstd -dc "/usr/lib/modules/$k/kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.zst" \
+  | strings | rg -c dcn401_hpo_frl_stream_encoder || echo 0
+```
+
+Non-zero means Valve now ship it.
 
 ### Tested by wiping each piece
 
