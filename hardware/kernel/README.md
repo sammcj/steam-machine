@@ -16,32 +16,48 @@ Full measurement capture, with the raw debugfs output it was read from: [`frl-4k
 
 Everything below this section is the reasoning. If you just want it working:
 
+> **No warranty.** This replaces your kernel and edits your bootloader config on hardware that is not mine; it worked here, it may not work for you, and you run it entirely at your own risk. Read [Warning](#warning) before starting.
+
 **You need this if** you have an RDNA4 Radeon (RX 9000 series) on SteamOS, a HDMI 2.1 display, and the HDMI port refuses anything above 4K60. No Valve kernel has native FRL, so no setting fixes it - it needs a different kernel.
 
-**Do not skip the boot-safety parts if your only display is a TV.** A kernel that fails to modeset with no second monitor is a lockout.
+**Before you start:** clone this repo somewhere permanent under `/home` and leave it there. `install.sh` registers a systemd unit pointing at an absolute path into it, and that unit is what puts the kernel back after a SteamOS update. Moving the repo later means re-running `--install`.
 
-1. **Get the sources** - Valve's kernel src package (for the config), and mainline `v7.2-rc6` fetched into the same repo. [Details](#1-get-valves-source-tree).
-2. **Apply the patches** - all five are in [patches/](patches/) with provenance:
+All commands below are run from `hardware/kernel/` in this repo.
+
+1. **Get the sources** - Valve's kernel source package (for its config), plus mainline `v7.2-rc6` fetched into the same git repo. [Commands](#1-get-valves-source-tree).
+2. **Apply the patches** - all five, in order, are in [patches/](patches/):
    ```bash
+   cd /home/deck/kernel-frl/build72
    git checkout -b frl v7.2-rc6
-   git am /path/to/hardware/kernel/patches/*.patch
+   git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
    ```
-   `0001` keeps gamescope's HDR offload working on a non-Valve kernel. `0002`-`0005` are AMD's unmerged VRR/ALLM series - skip them if you only want 120 Hz, but then you get FRL without VRR.
-3. **Build it**, seeding the config from Valve's so you keep what SteamOS depends on. Needs a container; the rootfs is read-only and has no `bc`/`flex`/`bison`. ~25 min on a 9800X3D. [Details](#3-config-and-build).
-4. **Rebuild any out-of-tree modules** you rely on - here that is `it87` (fan/temp) and `btusb_mt7902` (Bluetooth). [Details](#4-out-of-tree-modules).
-5. **Install:**
+   `0001` keeps gamescope's HDR offload working on a non-Valve kernel - take it regardless. `0002`-`0005` are AMD's unmerged VRR/ALLM series; skip them and you get 120 Hz without VRR.
+3. **Build it** in a container - the rootfs is read-only and has no `bc`/`flex`/`bison`. Seed the config from Valve's so you keep what SteamOS depends on. ~25 min on a 9800X3D. [Full steps](#3-config-and-build):
    ```bash
-   sudo ./install.sh --cache     # pack the built kernel into ~/.cache/frl-kernel
+   cd /home/deck/kernel-frl
+   podman build -t kbuild:arch -f Containerfile .
+   podman run --rm -v $PWD:/work -w /work/build72 localhost/kbuild:arch make olddefconfig
+   podman run --rm -v $PWD:/work -w /work/build72 localhost/kbuild:arch make -j$(nproc) all
+   podman run --rm -v $PWD:/work -w /work/build72 localhost/kbuild:arch \
+     make -j$(nproc) modules_install INSTALL_MOD_PATH=/work/stage INSTALL_MOD_STRIP=1
+   ```
+   `INSTALL_MOD_STRIP=1` is not optional in practice: without it the module tree is 2.2 GB instead of 178 MB, and `/` has under 800 MB free.
+4. **Rebuild any out-of-tree modules** you depend on, against the new tree, before you reboot into it. Here that is `it87` (fan and temp sensors) and `btusb_mt7902` (Bluetooth) - lose them silently and you will blame the kernel. [Details](#4-out-of-tree-modules).
+5. **Copy the modules into place**, then install:
+   ```bash
+   sudo cp -a /home/deck/kernel-frl/stage/lib/modules/<kver> /usr/lib/modules/
+   sudo depmod <kver>
+   sudo ./install.sh --cache     # pack kernel + modules into ~/.cache/frl-kernel
    sudo ./install.sh --install   # deploy, initramfs, boot entry, self-heal service
    ```
-6. **Reboot.** A 10-second menu appears with the FRL entry preselected; the stock Valve kernel is one arrow-key away and boots automatically if the FRL entry can't load.
+6. **Reboot.** A 10-second menu appears with the FRL entry preselected. The stock Valve kernel is one arrow-key up, and GRUB falls back to it automatically if the FRL entry cannot load - so a bad build costs you a reboot, not a lockout. That safety is built into `install.sh`; you do not configure it.
 7. **Check it:**
    ```bash
    sudo ./install.sh --status
    ```
-   Want: `vrr_range : Min: 40 Max: 120`, `grub.cfg is stock : yes`, and an `HPO` line ending `ACTIVE 3840 560`.
+   Every component line should read `yes`, and `grub.cfg is stock : yes`. The link-state block only appears when you are running the FRL kernel: `HPO` populated with `ACTIVE` and your horizontal resolution means the native FRL path is carrying the link, and `vrr_range` should show your display's own VRR range rather than `Min: 0 Max: 0` (this TV reports `40`-`120`).
 
-**The one non-obvious setting:** the kernel parameter is `amdgpu.dcfeaturemask=0x402`, not the `dc_feature_mask=0x400` every guide on the web quotes. Both halves of that matter - [why](#two-traps-in-the-widely-quoted-incantation).
+**The one non-obvious setting:** the kernel parameter is `amdgpu.dcfeaturemask=0x402`, not the `dc_feature_mask=0x400` every guide on the web quotes. Both halves of that matter - [why](#two-traps-in-the-widely-quoted-incantation). `install.sh` puts it on the FRL boot entry for you.
 
 **To undo it all:** boot the stock kernel from the menu, then `sudo ./install.sh --uninstall`.
 
