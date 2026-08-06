@@ -133,3 +133,50 @@ reports HDR enabled.
  (BT.2020 RGB), zero underflow, over the native HDMI port on a
  Radeon RX 9070 XT -- using HDMI 2.1 FRL merged in Linux 7.2.
 ======================================================================
+
+================================================================
+ ADDENDUM 2 -- HDMI VRR + ALLM over FRL, 2026-08-06
+ Kernel: 7.2.0-rc6-frlprobe + Fangzhi Zuo's 4-patch series
+         (amd-gfx, 30 Jul 2026, Reviewed-by Harry Wentland)
+================================================================
+
+--- 1. Sink capability, from the EDID's HDMI Forum VSDB -------------
+
+  Note: this EDID has NO AMD VSDB / FreeSync block at all. Before the
+  series, amdgpu derived FreeSync capability only from the AMD block,
+  so this TV could never report VRR -- on FRL or on the converter.
+
+--- 2. vrr_range (debugfs) ------------------------------------------
+Min: 40
+Max: 120
+  Was 'Min: 0  Max: 0' on every previous kernel.
+
+--- 3. vrr_capable DRM property on the connected HDMI-A-1 -----------
+	160 vrr_capable:
+		flags: immutable range
+		values: 0 1
+		value: 1
+  Was 'value: 0'. This is the property userspace gates VRR on.
+
+--- 4. content type = Game (drives ALLM) ----------------------------
+	158 content type:
+		flags: enum
+		enums: No Data=0 Graphics=1 Photo=2 Cinema=3 Game=4
+		value: 4
+
+--- 5. Active mode, straight from the kernel ------------------------
+  #0 3840x2160 120.00 3840 4016 4104 4400 2160 2168 2178 2250 1188000 flags: phsync, pvsync; type: driver
+  1188000 kHz = 1188.00 MHz -- 1.98x the 600 MHz TMDS ceiling.
+
+--- 6. OTG dynamic vtotal now programmed ----------------------------
+OTG:  v_bs  v_be  v_ss  v_se  vpol  vmax  vmin  vmax_sel  vmin_sel  h_bs  h_be  h_ss  h_se  hpol  htot  vtot  underflow blank_en
+[0]:  2242    82     0    10     0  4500  4500         1         1  4224   384     0    88     0  4399  2249          0        0
+  vmax/vmin 4500 with vmax_sel/vmin_sel = 1. Both selectors read 0
+  before the series -- DRR was never armed.
+
+--- 7. Link unchanged: still native FRL, uncompressed, 12 bpc -------
+HPO:   OTG Inst     Link   Pixel Format   Depth   ODM Segments   Lanes   Borrow   h_active   h_blank
+[0]:          0   Training        4:4:4      12              0       4   ACTIVE       3840       560
+
+DSC: CLOCK_EN  SLICE_WIDTH  Bytes_pp
+[0]: 0         0            0         

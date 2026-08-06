@@ -221,9 +221,13 @@ The `hdmi_cec_state` debugfs entry reports `HDMI-CEC status: 1`, but that is the
 - **Wait for amdgpu to implement it.** No sign of it upstream. i915 and the DW-HDMI bridge drivers have CEC adapters; amdgpu does not.
 - **HDMI-CEC over the TV's own eARC/SIMPLINK** for the subset of things the TV can do itself - does not give the machine control.
 
-### VRR still does not work (L)
+### VRR: solved (2026-08-06)
 
-`vrr_range` reads `Min: 0  Max: 0` and `vrr_capable` is `0`. Expected: 7.2 shipped FRL **without** HDMI VRR, which is precisely why FRL is disabled by default there. Upstream commit `c3778921bf0d` says so in its own message.
+**Working.** `vrr_range` reads `Min: 40  Max: 120` and the `vrr_capable` DRM property on the connected HDMI-A-1 is `1`, at 3840x2160 @ 120 Hz over native FRL. Section 6 of [`frl-4k120-evidence.txt`](frl-4k120-evidence.txt) has the capture.
+
+The rest of this section is kept because it is the diagnosis, and it explains why the fix is the four patches in [patches/](patches/) rather than anything configurable.
+
+Stock 7.2-rc6 reads `Min: 0  Max: 0` with `vrr_capable` `0`. Expected: 7.2 shipped FRL **without** HDMI VRR, which is precisely why FRL is disabled by default there. Upstream commit `c3778921bf0d` says so in its own message.
 
 Note this is not a regression - VRR did not work through the converter either, for a different reason (it did not pass FreeSync through at all; see [hardware/display/](../display/README.md)).
 
@@ -242,7 +246,11 @@ Everything *downstream* is already fine. `optc401_set_drr()` and `optc401_set_vt
 
 Not merged, and not in `amd-staging-drm-next` - but note *why*: that branch's tip is `d8ab7636160e`, dated **29 July**, one day before the series was posted, and it has not moved since. Its absence there was never evidence of anything. An earlier version of this section said "nothing to build"; it was grepping for Valve's identifiers (`allm_mode`, `hdmi_vrr_desktop_mode`, `freesync_pcon_allow_all`) rather than AMD's, and those belong to a different, TMDS/PCON-only implementation.
 
-The thread mbox is fetchable from lore (Anubis blocks a plain `curl`; a git user-agent passes) and the patches apply by hand. 7.3 does not exist yet - 7.2 is still at rc6 - so this is a hand-applied in-review series or nothing.
+The thread mbox is fetchable from lore (Anubis blocks a plain `curl`; a git user-agent passes) and the patches apply by hand. 7.3 does not exist yet - 7.2 is still at rc6 - so this was a hand-applied in-review series or nothing. **Applied 2026-08-06**; see [patches/](patches/) for the ported series and what had to change to land it on mainline.
+
+**Why patch 3/4 is the one that mattered here.** The C9's EDID has **no AMD VSDB at all** - no FreeSync block. Every pre-series kernel derived HDMI FreeSync capability solely from that block, so this TV could never report VRR, on FRL or through the converter. Its HDMI Forum VSDB does carry `VRRmin: 40 Hz`, `VRRmax: 120 Hz` and `Supports Auto Low-Latency Mode`, and 3/4 is exactly the fallback that reads them. Patch 1/4 alone would have done nothing on this display.
+
+Confirmation that the timing generator followed: the DTN log's OTG row now shows `vmax 4500 vmin 4500` with `vmax_sel`/`vmin_sel` both `1`. Both selectors read `0` on every earlier kernel - dynamic vtotal was available the whole time and simply never armed.
 
 Also worth taking regardless of VRR: `drm/amd/display: restore FRL cap on non-destructive HDMI link verify` (August archive), without which an FRL link can collapse back to TMDS across a hotplug.
 
