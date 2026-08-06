@@ -198,6 +198,8 @@ The `hdmi_cec_state` debugfs entry reports `HDMI-CEC status: 1`, but that is the
 
 Addressing it means one of:
 
+**Verdict: not closable in software.** There is no module to load, no parameter to set and no debugfs knob that registers an adapter; the capability does not exist in the driver. The options are:
+
 - **A USB CEC adapter** (Pulse-Eight or similar) — `cec-gpio`/`usbcec` register a real adapter and `libcec` works. Costs a USB port and about $60 AUD. The only option that works today.
 - **Wait for amdgpu to implement it.** No sign of it upstream. i915 and the DW-HDMI bridge drivers have CEC adapters; amdgpu does not.
 - **HDMI-CEC over the TV's own eARC/SIMPLINK** for the subset of things the TV can do itself — does not give the machine control.
@@ -208,7 +210,9 @@ Addressing it means one of:
 
 Note this is not a regression — VRR did not work through the converter either, for a different reason (it did not pass FreeSync through at all; see [hardware/display/](../display/README.md)).
 
-The ALLM + HDMI VRR series is in review and lines up with **7.3**. When it lands, revisit. The C9 supports 40–120 Hz VRR, so there is a real gain waiting.
+**Checked on 2026-08-06: there is nothing to build yet.** `amd-staging-drm-next` was fetched (`d8ab7636160e`, 1034 commits ahead of `v7.2-rc6`) and the "Gaming Features" series — Tomasz Pakuła's ALLM + HDMI VRR work, v4, 27 patches — is **not in it**. Grepping the whole staging tree for `allm_mode`, `hdmi_vrr_desktop_mode` and `freesync_pcon_allow_all` returns nothing, while the same three appear 3, 2 and 3 times in Valve's 6.18 tree. So the only tree that carries any of this today is Valve's own, and theirs targets the TMDS path.
+
+7.3 does not exist — 7.2 is still at rc6. Building "7.3 for VRR" is not an option that is on the table, and will not be until the series is at least in `amd-staging-drm-next`. That branch is the thing to re-check, not the mailing list: `git fetch amd-staging && git log --oneline -S allm_mode`. The C9 does 40–120 Hz VRR, so there is a real gain waiting, just nothing to compile against.
 
 ### The probe kernel is mainline, so Valve's patches are gone (M)
 
