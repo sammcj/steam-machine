@@ -65,14 +65,11 @@ Dropped to (L): it would need a different converter, or upstream FRL on a 7.2+ k
 
 #### HDMI CEC (M)
 
-Does not work, and moving to the native HDMI port did **not** fix it. The `cec` module is loaded and referenced by `drm_display_helper` and `amdgpu`, but no CEC adapter is registered and there is no `/dev/cec*`. amdgpu has never exposed one for its own HDMI ports - the `cec` dependency comes from the DisplayPort CEC-tunnelling path, which needs a DP branch device. The `hdmi_cec_state` debugfs entry reporting `HDMI-CEC status: 1` is the *sink's* advertised capability read over DDC, not a Linux adapter. A USB CEC adapter (Pulse-Eight, ~$60 AUD) is the only thing that works today. See [hardware/kernel/](hardware/kernel/README.md).
+Does not work **on the native HDMI port**, and moving to it did not fix it. Verified 2026-08-07 from `amdgpu.ko`'s own symbol table rather than inferred: every CEC symbol the module imports is either `cec_notifier_*` (publishes the EDID physical address *for* a separate CEC adapter driver; allocates nothing) or `drm_dp_cec_*` (CEC-Tunnelling-over-AUX, which needs a DP→HDMI branch device that implements CEC itself). The adapter-registration API - `cec_allocate_adapter`, `cec_register_adapter`, `drmm_connector_hdmi_cec_adapter_register` - is absent entirely, so there is no `/dev/cec*` and nothing to attach one to. The `hdmi_cec_state` debugfs entry reporting `HDMI-CEC status: 1` is the *sink's* advertised capability read over DDC, not a Linux adapter.
 
-**Neither the parameter nor ODM combine causes it** (both measured 2026-08-02):
+**Reports of "CEC works on my 9070 XT" are the DisplayPort tunnel, not the HDMI port.** [Twsts/steamos-cec-toolkit](https://github.com/Twsts/steamos-cec-toolkit) - a SteamOS CEC toolkit worth knowing about - is built and tested on exactly that card with **a UGREEN DP→HDMI CEC adapter** providing `/dev/cec0`. It is installed here and inert until an adapter exists.
 
-1. *Not the parameter.* With `freesync_pcon_allow_all=0` live, the display still runs **ODM 2:1 combine** - 4K120 needs a ~1.19 GHz pixel clock, more than one DCN pipe can clock out, so ODM is mandatory for the mode and turning FreeSync off could never have removed it. FreeSync is confirmed not forced on (parameter `0`, sink `vrr_range Min 0 Max 0`).
-2. *Not ODM either.* After the next reboot ODM 2:1 is **still** active and the seam is **gone**. So ODM is necessary for 4K120 but not sufficient to cause the artefact.
-
-Cause unresolved; not recurring; `underflow` was `0` throughout, so never bandwidth. The likely confound is that the session's X11-vs-Wayland state was never recorded - see the entry below. `hardware/display/install.sh --status` now reports VRR state and pipe topology so this is measured rather than eyeballed next time.
+That suggests an untested route worth the five minutes: put a CEC-tunnelling DP→HDMI adapter on a **spare DisplayPort output and an unused TV input**, leaving 4K120 FRL on the native HDMI port. CEC is a bus, so control should work whichever input the TV is showing. Otherwise a USB CEC adapter (Pulse-Eight, ~$60 AUD) is the option that definitely works. See [hardware/kernel/](hardware/kernel/README.md).
 
 ##### Onboard WiFi (L)
 - Bluetooth is **now working** - see [hardware/bluetooth/](hardware/bluetooth/README.md) and the [platform note below](#onboard-wireless-mediatek-mt7902).

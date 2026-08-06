@@ -4,7 +4,7 @@
 
 **4K 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10, zero underflow - over the GPU's native HDMI port**, on a hand-built mainline **Linux 7.2-rc6**. Achieved 2026-08-06. The UGREEN DP→HDMI converter is out of the chain entirely.
 
-This is strictly better than what the converter delivered: it managed 10 bpc *with* DSC, plus intermittent glitching and no CEC. See [hardware/display/](../display/README.md) for that setup, which this replaces.
+This is strictly better than what the converter delivered on picture quality: it managed 10 bpc *with* DSC, plus intermittent glitching. CEC was never tested while it was in the chain, and on the evidence below it may well have worked - see [CEC still does not work](#cec-still-does-not-work-m). See [hardware/display/](../display/README.md) for that setup, which this replaces.
 
 Full measurement capture, with the raw debugfs output it was read from: [`frl-4k120-evidence.txt`](frl-4k120-evidence.txt).
 
@@ -273,13 +273,50 @@ There is also a **fallback-initramfs entry** (`frl-probe-fallback`), which boots
 
 One of the two reasons for leaving the converter, and **the native port does not fix it**. The `cec` module is loaded and `drm_display_helper` and `amdgpu` both reference it, but **no CEC adapter is registered** and there is no `/dev/cec*` node.
 
-The `hdmi_cec_state` debugfs entry reports `HDMI-CEC status: 1`, but that is the *sink's* advertised CEC capability read over DDC - not a Linux CEC adapter. amdgpu has never exposed one for its own HDMI ports; the `cec` dependency comes from `drm_display_helper`'s DisplayPort CEC-tunnelling path, which needs a DP branch device.
+The `hdmi_cec_state` debugfs entry reports `HDMI-CEC status: 1`, but that is the *sink's* advertised CEC capability read over DDC - not a Linux CEC adapter.
 
-**Verdict: not closable in software.** There is no module to load, no parameter to set and no debugfs knob that registers an adapter; the capability does not exist in the driver. The options are:
+#### Proof, from the module's own symbol table
 
-- **A USB CEC adapter** (Pulse-Eight or similar) - `cec-gpio`/`usbcec` register a real adapter and `libcec` works. Costs a USB port and about $60 AUD. The only option that works today.
-- **Wait for amdgpu to implement it.** No sign of it upstream. i915 and the DW-HDMI bridge drivers have CEC adapters; amdgpu does not.
+The claim "amdgpu has no CEC adapter" is checkable in one command. Every CEC symbol `amdgpu.ko` imports falls into exactly two groups, and neither one creates an adapter:
+
+```console
+$ nm -u amdgpu.ko | rg -i cec
+                 U cec_fill_conn_info_from_drm
+                 U cec_notifier_conn_register
+                 U cec_notifier_conn_unregister
+                 U cec_notifier_set_phys_addr
+                 U drm_dp_cec_attach
+                 U drm_dp_cec_irq
+                 U drm_dp_cec_register_connector
+                 U drm_dp_cec_unregister_connector
+                 U drm_dp_cec_unset_edid
+```
+
+- `cec_notifier_*` **publishes** the HDMI physical address parsed out of the EDID so that a *separate* CEC adapter driver - an SoC IP block, or a chip like `ch7322` - knows which address to claim. It allocates nothing. This is exactly what the [CEC core docs](https://docs.kernel.org/driver-api/media/cec-core.html) describe it for.
+- `drm_dp_cec_*` is **CEC-Tunnelling-over-AUX** (added to amdgpu in 2018): CEC messages ride the DisplayPort AUX channel to a DP→HDMI branch device that implements CEC itself and advertises it in DPCD.
+
+What is *absent* is the whole adapter-registration API - `cec_allocate_adapter`, `cec_register_adapter`, and Maxime Ripard's newer `drmm_connector_hdmi_cec_adapter_register`. That last one is merged upstream, but its only consumers are **vc4** (Raspberry Pi) and the **adv7511** bridge - SoC HDMI transmitters with a physically wired CEC line. No amdgpu, i915/xe or nouveau use of it.
+
+So there is nothing for a native HDMI port to attach to. The `cec` module showing a refcount of 2 against `drm_display_helper` and `amdgpu` is the DP-tunnelling path being linked in, not an adapter being registered.
+
+**Verdict: not closable in software on the native HDMI port.** No module, parameter or debugfs knob registers an adapter, because the capability is not in the driver. The options:
+
+- **A DP→HDMI adapter that does CEC tunnelling**, on one of the spare DisplayPort outputs. This is the interesting one and it is untested here - see below.
+- **A USB CEC adapter** (Pulse-Eight or similar) - registers a real adapter and `libcec` works. Costs a USB port and about $60 AUD.
+- **Wait for amdgpu to implement it.** No sign of it upstream.
 - **HDMI-CEC over the TV's own eARC/SIMPLINK** for the subset of things the TV can do itself - does not give the machine control.
+
+#### "But CEC works on my 9070 XT" - what those reports actually are
+
+They are the DP-AUX tunnel, not the HDMI port. The clearest evidence is [Twsts/steamos-cec-toolkit](https://github.com/Twsts/steamos-cec-toolkit), a SteamOS CEC toolkit whose **reference hardware is a Radeon 9070 XT with a UGREEN DisplayPort-to-HDMI CEC adapter** - the same class of device this build removed to get FRL. It requires `/dev/cec0` to already exist via that adapter; it does not claim GPU-native CEC. No first-hand report of `/dev/cec0` appearing from a Radeon's own HDMI connector turned up anywhere.
+
+There is no AMD statement or teardown either way on whether the CEC pin is physically wired on consumer Radeon boards. That question is moot while the driver has no adapter to wire it to, and it is not the claim being made here.
+
+#### Untested idea: CEC on a spare DP output, keeping HDMI for video
+
+The TV has four HDMI inputs and the card has spare DisplayPort outputs. A DP→HDMI adapter with CEC tunnelling, plugged into an *unused* TV input, should register `/dev/cec0` and put the machine on the TV's CEC bus - while 4K120 FRL keeps running over the native HDMI port on the input the TV is actually displaying. CEC is a bus, not a per-input channel, so control should work regardless of which input is selected.
+
+Worth trying with the UGREEN 80397 already in the parts bin, since it costs nothing: plug it into a spare TV input and check for `/dev/cec0`. Unknowns: whether that specific model implements CEC tunnelling at all (the toolkit's model is not identified), and whether the TV reacts badly to a second source it is not showing. If it works, the `steamos-cec-toolkit` units already installed on this machine become live.
 
 ### VRR: solved (2026-08-06)
 
