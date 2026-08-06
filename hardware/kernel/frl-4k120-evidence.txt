@@ -178,6 +178,24 @@ OTG:  v_bs  v_be  v_ss  v_se  vpol  vmax  vmin  vmax_sel  vmin_sel  h_bs  h_be  
   vmax/vmin 4500 with vmax_sel/vmin_sel = 1. Both selectors read 0
   before the series -- DRR was never armed.
 
+  Note this capture caught it CLAMPED: equal bounds is VRR_STATE_ACTIVE_FIXED,
+  which is what a static desktop settles into. Recaptured 2026-08-06, later,
+  with the bounds open:
+
+  [0]:  2242  82  0  10  0  6749  2249  1  1  4224  384  0  88  0  4399  2249  0  0
+
+  Registers store total-1, so vmax 6749 -> vtotal 6750 and vmin 2249 -> 2250.
+  At 1188.00 MHz with htotal 4400:
+    1188000000 / (4400 * 6750) =  40.00 Hz
+    1188000000 / (4400 * 2250) = 120.00 Hz
+  i.e. armed across exactly the 40-120 Hz window the C9 advertises in its
+  HF-VSDB. The 4500/4500 row above is the same state pinned to 60.00 Hz.
+
+  NOT established, either way: whether the sink tracks the varying rate. Every
+  reading here is source-side. Same for ALLM -- content type 4 is a property the
+  driver sets, not proof the TV entered game mode. The TV's own "Instant Game
+  Response" indicator is the check that would settle both; it has not been run.
+
 --- 7. Link unchanged: still native FRL, uncompressed, 12 bpc -------
 HPO:   OTG Inst     Link   Pixel Format   Depth   ODM Segments   Lanes   Borrow   h_active   h_blank
 [0]:          0   Training        4:4:4      12              0       4   ACTIVE       3840       560

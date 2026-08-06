@@ -277,7 +277,9 @@ mode           3840x2160 @ 120.00, RGB 4:4:4, 12 bpc, DSC off, underflow 0
 
 The link is unchanged underneath: still native FRL, 4 lanes, uncompressed, single pipe.
 
-The hardware side confirms it rather than just the property flipping - the DTN log's OTG row now reads `vmax 4500 vmin 4500` with `vmax_sel`/`vmin_sel` both `1`. Both selectors were `0` on every earlier kernel, so dynamic vtotal was reachable on the FRL path the whole time and simply never armed.
+The hardware side confirms it rather than just the property flipping. `vmax_sel`/`vmin_sel` were `0` on every earlier kernel - dynamic vtotal was reachable on the FRL path the whole time and simply never armed - and now read `1`, with bounds that actually move: `vmax 6749 vmin 2249` when VRR is active, `4499/4499` when it settles to a fixed 60 Hz. Registers store total-1, so at 1188.00 MHz with htotal 4400 that is 40.00 Hz and 120.00 Hz, matching the HF-VSDB range exactly.
+
+Caveat on my end: everything I've measured is source-side. I haven't confirmed on the TV that it's tracking the varying rate, or that ALLM actually put it in game mode - `content type 4` is just the property the driver sets.
 
 ## The part that seems worth your attention
 
