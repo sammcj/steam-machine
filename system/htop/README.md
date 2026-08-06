@@ -29,7 +29,7 @@ $ findmnt -no TARGET,SOURCE /root /home
 /home  /dev/nvme0n1p8
 ```
 
-`/root` is a **SteamOS offload mount** — bind-mounted from the home partition, not part of the rootfs subvol an A/B update replaces. It is also writable regardless of `steamos-readonly`. (An earlier version of this file claimed the opposite, inferred from the rootfs mount without checking `/root` itself. It was wrong; `/opt`, `/srv`, `/nix`, `/var/log` and `/var/lib/flatpak` are offloaded the same way — see [system/btop/](../btop/README.md), which depends on that property for `/opt`.)
+`/root` is a **SteamOS offload mount** — bind-mounted from the home partition, not part of the rootfs subvol an A/B update replaces. It is also writable regardless of `steamos-readonly`. Check `/root` itself rather than inferring from the rootfs mount — `/opt`, `/srv`, `/nix`, `/var/log` and `/var/lib/flatpak` are offloaded the same way, and [system/btop/](../btop/README.md) depends on that property for `/opt`.
 
 So if settings revert for either account, an OS update is not the cause. The two real causes:
 
