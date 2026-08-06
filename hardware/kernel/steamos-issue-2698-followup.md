@@ -54,7 +54,7 @@ Two things that cost me time, in case they're worth a doc note:
 
 Two things that still don't work, neither of them blockers for the above:
 
-- **HDMI VRR.** 7.2 shipped FRL without it, which is the stated reason it's default-off. The ALLM + HDMI VRR series isn't in `amd-staging-drm-next` either as of today (`d8ab7636160e`) - `allm_mode`, `hdmi_vrr_desktop_mode` and `freesync_pcon_allow_all` are absent from that tree while present in neptune 6.18.
+- **HDMI VRR.** 7.2 shipped FRL without it, which is the stated reason it's default-off. Concretely, `amdgpu_dm_update_freesync_caps()` only tests for DP/eDP/`SIGNAL_TYPE_HDMI_TYPE_A`/PCON, and FRL is a distinct signal type, so `vrr_capable` is 0. Fangzhi Zuo's four patches of 30 July 2026 address exactly that (`Add 2.1 FreeSync support for AMD VSDB EDID Block`, the HF-VSDB gaming-capability parse, `Add HDMI 2.1 VRR support from HF-VSDB`, `Add HDMI ALLM support`) and carry Harry Wentland's Reviewed-by, but aren't merged yet. Probably worth bundling with the FRL commits whenever you do this, so neptune doesn't ship FRL-without-VRR.
 - **CEC.** amdgpu registers no CEC adapter for its own HDMI ports, so there's no `/dev/cec*` on any kernel. `hdmi_cec_state` reporting `1` is the sink's DDC-advertised capability. Unrelated to FRL.
 
 One SteamOS-side thing, relevant to anyone testing an alternate kernel: `GRUB_TIMEOUT` in `/etc/default/grub*` has no effect - the generated `grub.cfg`'s steamenv header hardcodes `timeout=0`, so no menu appears and an alternate entry is unreachable. `/efi/EFI/steamos/custom.cfg`, sourced later by `41_custom`, is the override that works.

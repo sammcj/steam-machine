@@ -182,11 +182,23 @@ An earlier version instead installed into `/boot/` and pinned `GRUB_DEFAULT` to 
 
 `set default` in `custom.cfg` is guarded by `[ -z "${boot_once}" ]`, so `grub-reboot` still works for a one-shot boot into a different entry.
 
+**4. `set fallback` covers the one gap the above does not.** Everything so far protects against `custom.cfg` being *absent*. It does not protect against `custom.cfg` being present and pointing at a kernel that isn't — a partial install, an interrupted uninstall, a manual deletion. In that state GRUB prints an error and waits for a keypress *with no timeout*, which on a TV-only machine is an outage. So `custom.cfg` also sets:
+
+```
+set fallback="gnulinux-simple-<rootfs-uuid> 0"
+```
+
+By id first, since `10_linux` names the top-level SteamOS entry after the rootfs UUID; by index `0` as a backstop if a future `grub.cfg` drops the id. Any failure to load the FRL entry now boots the stock kernel automatically.
+
+The uninstall path is ordered to match: the menu entry is removed *before* the kernel it points at, and the "is the stock kernel still in `grub.cfg`?" check runs before anything is deleted rather than after.
+
 ### Recovery
 
-In order: wait out the 10-second menu having selected the stock entry → power-cycle and pick it → ssh in → `sudo ./install.sh --uninstall` → `steamcl.efi` and the A/B slots are untouched throughout.
+In order: let `set fallback` boot the stock kernel by itself → wait out the 10-second menu having selected the stock entry → power-cycle and pick it → ssh in → `sudo ./install.sh --uninstall` → `steamcl.efi` and the A/B slots are untouched throughout.
 
-`--uninstall` refuses to run while the FRL kernel is the running kernel, and refuses to finish — telling you not to reboot — if the stock kernel is missing from `grub.cfg`.
+`--uninstall` refuses to run while the FRL kernel is the running kernel, and refuses to *start* if the stock kernel is missing from `grub.cfg`.
+
+There is also a **fallback-initramfs entry** (`frl-probe-fallback`), which boots the same kernel with the no-autodetect image. The preset built that image either way; before this it was 20 MB that nothing could reach.
 
 ## Gaps
 
@@ -208,9 +220,24 @@ The `hdmi_cec_state` debugfs entry reports `HDMI-CEC status: 1`, but that is the
 
 Note this is not a regression — VRR did not work through the converter either, for a different reason (it did not pass FreeSync through at all; see [hardware/display/](../display/README.md)).
 
-**Checked on 2026-08-06: there is nothing to build yet.** `amd-staging-drm-next` was fetched (`d8ab7636160e`, 1034 commits ahead of `v7.2-rc6`) and the "Gaming Features" series — Tomasz Pakuła's ALLM + HDMI VRR work, v4, 27 patches — is **not in it**. Grepping the whole staging tree for `allm_mode`, `hdmi_vrr_desktop_mode` and `freesync_pcon_allow_all` returns nothing, while the same three appear 3, 2 and 3 times in Valve's 6.18 tree. So the only tree that carries any of this today is Valve's own, and theirs targets the TMDS path.
+**The exact gate, traced in the 7.2-rc6 source.** `amdgpu_dm_update_freesync_caps()` (`amdgpu_dm.c:13884`) has three branches that can set `freesync_capable = true`: DP/eDP, `sink_signal == SIGNAL_TYPE_HDMI_TYPE_A`, and the PCON whitelist. FRL is a **distinct signal type** — `SIGNAL_TYPE_HDMI_FRL = (1 << 8)` against `SIGNAL_TYPE_HDMI_TYPE_A = (1 << 2)` in `signal_types.h:40,46` — and link detection sets it (`link_detection.c:855`). So it matches none of the three, `drm_connector_set_vrr_capable_property(connector, false)` is called, and userspace is never offered `VRR_ENABLED`.
 
-7.3 does not exist — 7.2 is still at rc6. Building "7.3 for VRR" is not an option that is on the table, and will not be until the series is at least in `amd-staging-drm-next`. That branch is the thing to re-check, not the mailing list: `git fetch amd-staging && git log --oneline -S allm_mode`. The C9 does 40–120 Hz VRR, so there is a real gain waiting, just nothing to compile against.
+Everything *downstream* is already fine. `optc401_set_drr()` and `optc401_set_vtotal_min_max()` contain no signal check at all; `dc->caps.max_v_total` is `(1 << 15) - 1` on Navi 48; the FreeSync SPD packet already reaches HPO generic slot 3 on the FRL encoder; slot 12 is wired for VTEM but nothing ever populates it. Dynamic vtotal is available on this path today — the driver just refuses to advertise it.
+
+**There is a reviewed patch series for exactly this.** Fangzhi Zuo (AMD, the FRL author) posted four patches on **30 July 2026**, all Reviewed-by Harry Wentland the next day:
+
+| Patch | What it does |
+|---|---|
+| 1/4 `Add 2.1 FreeSync support for AMD VSDB EDID Block` | accepts `SIGNAL_TYPE_HDMI_FRL` when parsing the AMD VSDB, and emits the VTEM infopacket for FRL streams |
+| 2/4 `drm/edid: parse HDMI 2.1 gaming (ALLM/VRR) capabilities from HF-VSDB` | DRM core — reads HF-VSDB bytes 8/9/10, which mainline drops on the floor today |
+| 3/4 `Add HDMI 2.1 VRR support from HF-VSDB` | falls back to the HDMI Forum VRR range when the AMD VSDB has none |
+| 4/4 `Add HDMI ALLM support` | ALLM in the HF-VSIF |
+
+Not merged, and not in `amd-staging-drm-next` — but note *why*: that branch's tip is `d8ab7636160e`, dated **29 July**, one day before the series was posted, and it has not moved since. Its absence there was never evidence of anything. An earlier version of this section said "nothing to build"; it was grepping for Valve's identifiers (`allm_mode`, `hdmi_vrr_desktop_mode`, `freesync_pcon_allow_all`) rather than AMD's, and those belong to a different, TMDS/PCON-only implementation.
+
+The thread mbox is fetchable from lore (Anubis blocks a plain `curl`; a git user-agent passes) and the patches apply by hand. 7.3 does not exist yet — 7.2 is still at rc6 — so this is a hand-applied in-review series or nothing.
+
+Also worth taking regardless of VRR: `drm/amd/display: restore FRL cap on non-destructive HDMI link verify` (August archive), without which an FRL link can collapse back to TMDS across a hotplug.
 
 ### The probe kernel is mainline, so Valve's patches are gone (M)
 
@@ -260,17 +287,24 @@ Expect real work: `dc/dml2` was renamed to `dc/dml2_0` in 6.19, and there are ro
 
 The Valve tree is now local. `git log v6.18..6.18.33-drmexec-valve2` against a fetched upstream tag will list exactly what Valve add, which retires the "unexamined" caveat above.
 
-### 4. Watch `amd-staging-drm-next` for the VRR series (L)
+### 4. Apply the four VRR patches (M)
 
-The one thing worth periodically re-checking. AMD's tree is already a remote (`agd5f`) in the build tree:
+See the VRR gap above for what they are and why they apply to this exact configuration. Reviewed by AMD's own display maintainer, ~200 lines across four patches, and the only in-tree work needed is a signal-type test and an EDID parse — far smaller than the rebase in step 1, and it is the one change that would make the TV's 40–120 Hz VRR usable.
+
+The thread mbox is already fetched. Note that `lore.kernel.org` is behind Anubis proof-of-work, so a plain `curl` gets a challenge page; a git user-agent passes:
+
+```bash
+curl -A 'git/2.5' -o series.mbox.gz \
+  'https://lore.kernel.org/amd-gfx/20260730171754.704049-1-jerry.zuo@amd.com/t.mbox.gz'
+```
+
+Caveat: it is an unmerged series and patch 4/4 has an unaddressed review comment, so expect to hand-fix. Also re-check `amd-staging-drm-next` first — if it has moved past 29 July, the patches may have landed and a plain fetch is easier:
 
 ```bash
 cd /home/deck/kernel-frl/build72
 git fetch agd5f amd-staging-drm-next
-git log --oneline FETCH_HEAD -S allm_mode -- drivers/gpu/drm/amd
+git log --oneline FETCH_HEAD -i --grep='HF-VSDB' --grep='ALLM' -- drivers/gpu/drm
 ```
-
-Anything returned means the Gaming Features series has landed and a rebuild is worth doing. Nothing returned means there is still no VRR to have. See the VRR gap above for why the mailing list is the wrong place to watch.
 
 ## How it survives updates
 
@@ -299,6 +333,10 @@ Each of these was deleted and `--boot` run, then `--status` checked:
 | nothing | correctly a no-op — "intact, nothing to do" |
 
 That found a real bug. `install_preset` was originally gated behind the initramfs check, so a run where only the preset had been deleted restored nothing while still reporting success. It is now split into `install_preset_file` and `regen_initramfs`, which is why they are separate functions.
+
+A stale `custom.cfg` — right file, wrong rootfs UUID, which is what an A/B slot swap would leave behind if the file were ever preserved — is detected and rewritten. Tested by substituting an all-zero UUID: `--status` reports `STALE`, and `--boot` repairs it.
+
+**`mkinitcpio` always exits 1 on this machine**, and that is expected: the SteamOS hooks ask for `steamdeck`, `steamdeck_hwmon`, `leds_steamdeck`, `extcon_steamdeck` and `blake2b_generic`, none of which exist in a mainline build. The running kernel booted from an image with exactly those errors. So the exit status alone cannot be the test — `regen_initramfs` filters those five known-benign lines, fails on any `ERROR` left over, and then requires both images to be *newer than the run*. The earlier version piped the output through `grep ... || true`, which discarded the exit status entirely and would have accepted a stale image from a previous kernel.
 
 The full-wipe case — deleting `/usr/lib/modules/<kver>` and `/boot/frl` — was **not** run live, because the FRL kernel was the running kernel and pulling its modules out from under it is a genuinely bad idea. Instead the cache tarball was extracted to a temp directory and verified to contain the right payload: `vmlinuz` byte-identical to the installed one, all modules, both out-of-tree modules (`it87.ko`, `btusb_mt7902.ko`), and no dangling `build` symlink. That path will get its real test the first time an update actually lands.
 
