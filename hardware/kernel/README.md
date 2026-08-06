@@ -196,8 +196,6 @@ One of the two reasons for leaving the converter, and **the native port does not
 
 The `hdmi_cec_state` debugfs entry reports `HDMI-CEC status: 1`, but that is the *sink's* advertised CEC capability read over DDC — not a Linux CEC adapter. amdgpu has never exposed one for its own HDMI ports; the `cec` dependency comes from `drm_display_helper`'s DisplayPort CEC-tunnelling path, which needs a DP branch device.
 
-Addressing it means one of:
-
 **Verdict: not closable in software.** There is no module to load, no parameter to set and no debugfs knob that registers an adapter; the capability does not exist in the driver. The options are:
 
 - **A USB CEC adapter** (Pulse-Eight or similar) — `cec-gpio`/`usbcec` register a real adapter and `libcec` works. Costs a USB port and about $60 AUD. The only option that works today.
@@ -257,6 +255,18 @@ Expect real work: `dc/dml2` was renamed to `dc/dml2_0` in 6.19, and there are ro
 ### 3. Answer the open question about `drm-exec` (L)
 
 The Valve tree is now local. `git log v6.18..6.18.33-drmexec-valve2` against a fetched upstream tag will list exactly what Valve add, which retires the "unexamined" caveat above.
+
+### 4. Watch `amd-staging-drm-next` for the VRR series (L)
+
+The one thing worth periodically re-checking. AMD's tree is already a remote (`agd5f`) in the build tree:
+
+```bash
+cd /home/deck/kernel-frl/build72
+git fetch agd5f amd-staging-drm-next
+git log --oneline FETCH_HEAD -S allm_mode -- drivers/gpu/drm/amd
+```
+
+Anything returned means the Gaming Features series has landed and a rebuild is worth doing. Nothing returned means there is still no VRR to have. See the VRR gap above for why the mailing list is the wrong place to watch.
 
 ## How it survives updates
 
