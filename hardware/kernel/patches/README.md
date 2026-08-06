@@ -56,4 +56,20 @@ sudo ../install.sh --cache     # repack the artefact tarball from the build tree
 sudo ../install.sh --install   # deploy, regenerate initramfs, rewrite custom.cfg
 ```
 
-The previous kernel stays in `/usr/lib/modules/` until it is removed by hand, and the stock Valve kernel is untouched throughout.
+**Watch the version string.** `CONFIG_LOCALVERSION="-frlprobe"` is unchanged by `0002`–`0005`, so a rebuild produces the *same* `7.2.0-rc6-frlprobe` release string and overwrites `/usr/lib/modules/7.2.0-rc6-frlprobe` and `/boot/frl/` in place. There is no second menu entry to fall back to. Before deploying a rebuild, keep the working artefact:
+
+```bash
+cp -n ~/.cache/frl-kernel/kernel.tar.zst ~/.cache/frl-kernel/kernel.tar.zst.pre-vrr
+```
+
+To roll back: boot the stock Valve kernel from the GRUB menu, then
+
+```bash
+cp ~/.cache/frl-kernel/kernel.tar.zst.pre-vrr ~/.cache/frl-kernel/kernel.tar.zst
+sudo rm -rf /boot/frl /usr/lib/modules/7.2.0-rc6-frlprobe
+sudo ../install.sh --install
+```
+
+Bumping `CONFIG_LOCALVERSION` for a rebuild would let both kernels coexist with their own menu entries, at the cost of a full module rebuild and a second copy of the modules. Worth it for a risky change; not done here.
+
+The stock Valve kernel is untouched throughout, and `set fallback` in `custom.cfg` boots it automatically if the FRL entry cannot load.
