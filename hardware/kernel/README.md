@@ -340,6 +340,24 @@ Worth ruling out before believing any report: a USB CEC dongle elsewhere in the 
 
 **A real counter-example, and why it does not apply.** ChromeOS's `cros-ec-cec` driver exposes working CEC on machines with AMD graphics - but it is the mainboard's embedded controller driving the pin over its own GPIO, entirely independent of the GPU. Same category as a USB dongle, just soldered down. It proves the pin *can* be routed and driven when a vendor chooses to; it is not GPU-native CEC and there is no such EC on this board. The open, unresolved [Framework Desktop feature request](https://github.com/FrameworkComputer/SoftwareFirmwareIssueTracker/issues/129) for CEC on an AMD Ryzen AI 300 board is the same story from the other side.
 
+#### What CEC would actually buy on this TV
+
+Worth being concrete, because "the display wakes up when the PC boots" is true of monitors and **not** of this TV, and the two get conflated. A DP or HDMI monitor follows the signal - hot-plug detect plus auto-source-select, no messages sent, no CEC anywhere (CEC is not in the DisplayPort spec at all). An LG C9 is a consumer-electronics device that expects a CEC `Image View On` to leave standby.
+
+Checked against LG's documentation for the C9 (webOS 4.5), with SIMPLINK off:
+
+| Behaviour | Needs CEC |
+| --- | --- |
+| Wake from standby when the PC starts driving HDMI | **Yes.** LG documents only two ways the set powers itself on - the Power-On Timer, and CEC. There is no signal-only wake path |
+| Auto-switch to an input that has become active | **Yes** - that is "Auto Device Detection", layered on SIMPLINK |
+| Standby when the signal disappears | **No** - inactivity/no-signal timeout, independent of SIMPLINK |
+| Power the TV off when the PC shuts down | **Yes** |
+| Volume to the TV or AVR, magic remote driving Game Mode | **Yes** |
+
+This is confirmed behaviour on this machine, not theory: with the PC up and driving HDMI at 4K120, the TV stays in standby until switched on by hand.
+
+So the gap is real rather than cosmetic, which is what makes the DP-adapter idea below worth testing rather than filing as a curiosity.
+
 #### Untested idea: CEC on a spare DP output, keeping HDMI for video
 
 The TV has four HDMI inputs and the card has spare DisplayPort outputs. A DP→HDMI adapter with CEC tunnelling, plugged into an *unused* TV input, should register `/dev/cec0` and put the machine on the TV's CEC bus - while 4K120 FRL keeps running over the native HDMI port on the input the TV is actually displaying. CEC is a bus, not a per-input channel, so control should work regardless of which input is selected.
@@ -657,6 +675,42 @@ sudo ./install.sh --install
 ```
 
 Worth doing the **stock Valve kernel** first, though - one arrow-key up in the GRUB menu, no install step, and it establishes whether power-off works at all on this hardware and firmware. If the stock 6.16 kernel hangs too, none of the above matters and this is a board or firmware problem, not a patch problem.
+
+#### Third occurrence (2026-08-07 09:17) - both eliminations tested and failed
+
+The one useful hang so far, because it was the first run as a controlled test rather than observed after the fact. Both candidate causes were removed beforehand and it hung anyway:
+
+| Removed before this attempt | Result |
+| --- | --- |
+| BTRFS array masked and unmounted | still hung - **eliminated** |
+| `steamos-cec-before-sleep.service` disabled | still hung - **eliminated** |
+
+Two further facts from it:
+
+- **The session was ten minutes long** (09:07-09:17), in Desktop mode. Load and uptime are now out three times over.
+- **The HDMI link was still up and carrying HDR at the hang.** The TV showed a black frame but not "No Signal", so the GPU never released the display. This is the sharpest clue yet and it agrees with the `HDR SB:` infopacket dumps being the last meaningful kernel messages in the two earlier hangs.
+
+`/sys/fs/pstore` empty again - a hang, not a panic, three for three.
+
+#### `bin/poweroff-test.sh` - bisecting it without a trip to the living room
+
+Each mode removes one layer, and all of them are run over SSH. A marker is written to `/home/deck/.poweroff-test` *before* the attempt, so a forced power-cycle does not lose which test it was.
+
+```bash
+sudo ./bin/poweroff-test.sh --report     # what happened last time (read-only, safe)
+sudo ./bin/poweroff-test.sh --plain      # control: an ordinary poweroff
+sudo ./bin/poweroff-test.sh --no-gpu     # stop the session, unbind fbcon, unload amdgpu, then poweroff
+sudo ./bin/poweroff-test.sh --sysrq      # skip systemd: SysRq sync + remount-ro + poweroff
+```
+
+**`--no-gpu` is the discriminating one.** It stops the graphical session, unbinds every non-dummy vtcon so fbcon releases the framebuffer, and unloads `amdgpu` before calling `poweroff`. If the driver will not unload it refuses to continue rather than burning a power-cycle on an inconclusive run.
+
+| `--no-gpu` result | Conclusion |
+| --- | --- |
+| Powers off cleanly | The fault is in amdgpu's teardown path. The VRR series becomes the prime suspect and the A/B below is worth the reboots |
+| Hangs anyway | amdgpu is not the cause. Stop bisecting patches and look at ACPI/firmware - try `--sysrq` next, and the stock Valve kernel after that |
+
+`--sysrq` is the follow-up either way: it calls the kernel's own poweroff path with systemd out of the picture. If **that** hangs, nothing in userspace or in the display driver is responsible.
 
 #### The BTRFS array is disabled while this runs (2026-08-07)
 
