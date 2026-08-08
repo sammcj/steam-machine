@@ -7,7 +7,15 @@
 #                           update deleted; no-op if everything is present
 #   ./install.sh --status   report current state and exit
 #   ./install.sh --uninstall
-#   ./install.sh --cache    (re)build the cache tarball from a kernel build tree
+#   ./install.sh --cache    save the INSTALLED kernel and modules into the
+#                           cache tarball on /home
+#
+# About --cache, because getting this wrong is silent: the tarball under /home
+# is the ONLY thing that survives a SteamOS A/B update. --boot restores the
+# kernel by extracting it, so whatever is in /usr/lib/modules at the moment you
+# run --cache is exactly what comes back -- and anything installed by hand
+# afterwards is lost at the next OS update with no symptom beyond the feature
+# quietly not working. --status warns when the two have drifted apart.
 #
 # Everything authoritative lives under /home, because SteamOS replaces the
 # whole rootfs slot AND the per-slot EFI partition on every A/B update.
@@ -376,6 +384,20 @@ do_status() {
         && echo "yes ($efi/custom.cfg)" \
         || { [[ -f "$efi/custom.cfg" ]] && echo 'STALE -- wrong UUID or no kernel line' || echo NO; })"
     echo "boot service       : $(systemctl is-enabled steam-machine-kernel.service 2>/dev/null || echo NO)"
+    # Has anything been installed into the module tree since the cache was
+    # built? If so it is NOT protected: a SteamOS update restores the tarball
+    # and silently drops it. This caught the hand-installed hid-steam backport.
+    if [[ -n ${kver:-} && -d "/usr/lib/modules/$kver" && -f "$CACHE_DIR/kernel.tar.zst" ]]; then
+        newest="$(find "/usr/lib/modules/$kver" -newer "$CACHE_DIR/kernel.tar.zst" -type f -printf '%P\n' 2>/dev/null | head -3)"
+        if [[ -n $newest ]]; then
+            echo "cache freshness    : STALE -- modules changed since the cache was built."
+            echo "                     These would be LOST at the next OS update:"
+            printf '                       %s\n' $newest
+            echo "                     Fix: sudo ./install.sh --cache"
+        else
+            echo "cache freshness    : current (cache is newer than every installed module)"
+        fi
+    fi
     # Reported separately from "installed", because the file being present is
     # not the same as it having taken effect: it only applies from the next
     # boot, and a currently-bound mt7921e still hangs this session's power-off.

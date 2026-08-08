@@ -209,13 +209,15 @@ Install into `/usr/lib/modules/<kver>/updates/` and `depmod`, matching where [ha
 ## Install
 
 ```bash
-sudo ./install.sh --cache      # pack the built kernel into /home (once, after a build)
+sudo ./install.sh --cache      # snapshot the INSTALLED kernel + modules into /home
 sudo ./install.sh              # deploy it and make it the default boot entry
-sudo ./install.sh --status     # what is installed, plus the live FRL link state
+sudo ./install.sh --status     # what is installed, the live FRL link state, cache freshness
 sudo ./install.sh --uninstall  # remove everything, back to stock
 ```
 
-`--cache` reads the build tree at `/home/deck/kernel-frl/build72` (override with `FRL_BUILD_TREE`) and the installed modules, and writes a **172 MB** tarball to `/home/deck/.cache/frl-kernel/`. That tarball is the thing that makes reinstalling after an update cheap - no rebuild, no container, no network.
+`--cache` takes the bzImage from the build tree at `/home/deck/kernel-frl/build72` (override with `FRL_BUILD_TREE`) and the **installed** module tree at `/usr/lib/modules/<kver>`, and writes a **172 MB** tarball to `/home/deck/.cache/frl-kernel/`.
+
+That tarball is the only part of this that survives a SteamOS A/B update - `/boot` and `/usr/lib/modules` are both wiped, and `--boot` restores them from it. So **anything you add to the installed module tree is lost at the next OS update unless you re-run `--cache`**. Adding or rebuilding a module (`hid-steam`, `it87`, `btusb_mt7902`) means re-running it. `--status` compares the two and prints `cache freshness: STALE` with the offending files when they have drifted.
 
 ### What lands on the machine
 

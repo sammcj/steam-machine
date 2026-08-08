@@ -14,6 +14,13 @@
 ## WIP
 
 - HDMI 2.1 FRL (4K120), see [hardware/kernel/README.md](hardware/kernel/README.md)
+- **2026 Steam Controller on a mainline kernel** — Valve's `hid-steam` driver for the new controller backported out of SteamOS onto mainline 7.2-rc6, as [patches 0007-0008](hardware/kernel/patches/README.md). **Working** — all nine puck interfaces bind to `hid-steam` instead of `hid-generic`, and `/dev/input/js*` gamepad nodes appear.
+
+  Worth flagging because of where it is *not*: as of 2026-08-08 neither `torvalds/linux.git` nor the HID maintainer tree carries any of it — the newest `hid-steam.c` commits in both are from the 6.15 era, and nothing referencing IBEX, PROTEUS or NEREID exists in public kernel git. Valve have not posted the series to linux-input, and their own git needs credentials, so the only public copy is inside a 3.5 GB SteamOS source package.
+
+  The useful finding is that Valve's 6.18 driver **compiles against 7.2-rc6 with no source changes at all**, so those two patches are all any mainline kernel needs to get a real in-kernel gamepad node for the controller and its puck — Steam not required. The one trap: take the four device IDs into `hid-ids.h`, never Valve's whole header, which predates IDs 7.2 added and breaks unrelated HID drivers.
+
+  (Not a claim that nobody else has done this — only that it is not upstream and no public backport turned up.)
 
 ## TODO
 

@@ -16,6 +16,30 @@ git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
 | `0004` HDMI 2.1 VRR from HF-VSDB | upstream, unmerged | Falls back to the HDMI Forum VRR range when the AMD VSDB provides none. |
 | `0005` HDMI ALLM | upstream, unmerged | Sends the HF-VSIF with `ALLM_Mode=1` when the sink supports it and content type is Game or VRR is active. |
 | `0006` restore FRL cap on non-destructive verify | upstream, unmerged | One line. Without it an established FRL link **collapses to TMDS across a hotplug** — and since VRR keys on `SIGNAL_TYPE_HDMI_FRL`, it takes VRR with it. |
+| `0007` 2026 Steam Controller device IDs | Valve | Four `#define`s: `IBEX` `0x1302` wired, `IBEX_BLE` `0x1303` Bluetooth, `PROTEUS` `0x1304` the puck, `NEREID` `0x1305`. |
+| `0008` `hid-steam` 2026 controller support | Valve, **not upstream** | Valve's `hid-steam.c` verbatim from `6.18.42-valve2`. Without it the puck falls through to `hid-generic` and `hid_steam` never loads. |
+
+## Provenance of 0007-0008: Valve's, and nowhere else
+
+These two come from Valve's own kernel rather than a mailing list, which makes them different in kind from 0002-0006 and worth treating with more suspicion at each rebase.
+
+**They are not upstream.** Checked 2026-08-08 against both `torvalds/linux.git` and the HID maintainer tree `hid/hid.git`: the newest `drivers/hid/hid-steam.c` commits in either are from the 6.15 era ("Use new BTN_GRIP* buttons", "Remove the unused variable connected"). Nothing referencing IBEX, PROTEUS or NEREID exists in public kernel git. Valve have not posted the series to linux-input.
+
+**Getting them requires the full source package.** Valve's git is `git+ssh://` and needs credentials; anonymous HTTPS returns 403. The only public route is the 3.5 GB source package, which embeds a bare repo:
+
+```bash
+curl -fLO https://steamdeck-packages.steamos.cloud/archlinux-mirror/sources/jupiter-3.8/linux-neptune-618-6.18.42.valve2-1.src.tar.gz
+tar -xzf linux-neptune-618-6.18.42.valve2-1.src.tar.gz
+git -C linux-neptune-618/archlinux-linux-neptune show refs/tags/6.18.42-valve2:drivers/hid/hid-steam.c
+```
+
+Pin the tag matching the stock kernel you are comparing against — `6.18.42-valve2` is `af6356cf2488`.
+
+**`hid-steam.c` is taken verbatim; `hid-ids.h` must not be.** Valve's 6.18 header predates the Harmonix and PDP RiffMaster IDs that 7.2 added, so copying it wholesale removes definitions other in-tree HID drivers need and the build fails on a dozen unrelated errors. Only four defines are actually missing — confirmed by extracting every `USB_*_ID_*` symbol the driver references (8) and diffing against the mainline header.
+
+**No Kconfig or Makefile change is needed.** Valve's diffs for both files are entirely their other drivers; neither contains a `hid-steam` hunk.
+
+Valve's 6.18 driver compiles against 7.2-rc6 with **no source changes**, which is the part worth re-testing rather than assuming after any rebase.
 
 ## Why 0006 matters here more than its size suggests
 
