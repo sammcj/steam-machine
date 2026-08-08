@@ -173,6 +173,7 @@ persist — it is just the wrong tool. Verify with `getfacl /dev/hidraw5`.
 | Path                                          | Reboot | SteamOS A/B update      |
 | --------------------------------------------- | ------ | ----------------------- |
 | `/etc/udev/rules.d/60-steam-machine-rgb.rules` | yes    | only via the keep entry |
+| `/etc/udev/rules.d/.steam-machine-rgb-i2c`    | yes    | only via the keep entry |
 | `/etc/atomic-update.conf.d/steam-machine-rgb.conf` | yes | yes (default keep list) |
 | `/etc/systemd/system/steam-machine-rgb.service`| yes    | yes (default keep list) |
 | `~/.config/systemd/user/…`, this repo          | yes    | yes (`/home` untouched) |
@@ -182,11 +183,21 @@ The keep entry names the **specific file**, never `/etc/udev/rules.d` as a
 directory: an allowlisted path shadows all future upstream versions of it
 forever, and SteamOS ships its own rules into that directory.
 
-`install.sh --boot` reinstalls both `/etc` files if they are missing or
-modified, so the subsystem self-heals even if the keep entry itself was absent
-when an update ran. It also reloads udev *and* re-triggers the affected
-subsystems — a rules reload alone only affects the next uevent, so without the
-trigger a restored rule would do nothing until the following reboot.
+`install.sh --boot` reinstalls the `/etc` files if they are missing or modified,
+so the subsystem self-heals even if the keep entry itself was absent when an
+update ran. It also reloads udev *and* re-triggers the affected subsystems — a
+rules reload alone only affects the next uevent, so without the trigger a
+restored rule would do nothing until the following reboot.
+
+The self-heal is only as good as the marker, which is why the empty
+`.steam-machine-rgb-i2c` file is on the keep list too. It is the sole record
+that SMBus access was granted; `--boot` reads it to choose between the full rule
+and the `--no-i2c` one. Lose it and the heal succeeds *in the wrong form* — the
+rule comes back minus its SMBus stanza, OpenRGB stops seeing the DDR5 DIMMs, and
+every unit still reports success. The only symptom is RAM LEDs that come back
+on. Happened on the 2026-08-08 update to SteamOS 3.8.25, before the marker was
+listed. `--status` shows the truth: `SMBus access: granted` and `/dev/i2c-2
+(deck access: yes)`.
 
 ## Units
 
