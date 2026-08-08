@@ -69,7 +69,7 @@ Does not work **on the native HDMI port**, and moving to it did not fix it. Veri
 
 **The silicon has no CEC controller either**, so this is not a driver holding back hardware. AMD's own register headers in the 7.2-rc6 tree contain **zero** `CEC` macros across every DCN generation (1.0 → 4.1.0); the DCE-era headers have exactly one, a read-only `DC_PINSTRAPS_BIF_CEC_DIS` pinstrap bit that no code in the kernel reads and which is not a controller (no TX/RX buffer, no logical-address, status or interrupt register). There is no CEC command in the DMUB firmware enum either. Whether HDMI pin 13 is physically wired on this board is unresolved and moot - there is nothing in the ASIC to drive it.
 
-**Reports of "CEC works on my 9070 XT" are the DisplayPort tunnel, not the HDMI port.** [Twsts/steamos-cec-toolkit](https://github.com/Twsts/steamos-cec-toolkit) - a SteamOS CEC toolkit worth knowing about - is built and tested on exactly that card with **a UGREEN DP→HDMI CEC adapter** providing `/dev/cec0`. It is installed here and inert until an adapter exists.
+**Reports of "CEC works on my 9070 XT" are the DisplayPort tunnel, not the HDMI port.** [Twsts/steamos-cec-toolkit](https://github.com/Twsts/steamos-cec-toolkit) - a SteamOS CEC toolkit worth knowing about - is built and tested on exactly that card with **a UGREEN DP→HDMI CEC adapter** providing `/dev/cec0`. It was installed here on 2026-08-07 and **removed on 2026-08-08** — with no `/dev/cec0` it could do nothing, and it had put a script in `/etc/systemd/system-sleep/` that ran on every suspend and resume. Worth revisiting only if a CEC-tunnelling DP→HDMI adapter is ever added.
 
 That suggests an untested route worth the five minutes: put a CEC-tunnelling DP→HDMI adapter on a **spare DisplayPort output and an unused TV input**, leaving 4K120 FRL on the native HDMI port. CEC is a bus, so control should work whichever input the TV is showing. Otherwise a USB CEC adapter (Pulse-Eight, ~$60 AUD) is the option that definitely works. See [hardware/kernel/](hardware/kernel/README.md).
 
@@ -148,6 +148,20 @@ Links:
 ## Platform notes
 
 The following are **inferred** from Claude searching online - **before** setting Claude up on the hardware itself, when I do that I'll get Claude to validate, correct and enhance these notes.
+
+### After a SteamOS update: one command
+
+Every subsystem installs a systemd unit that runs its own `install.sh --boot` at each boot, so an A/B update repairs itself with no intervention. The top-level `install.sh` does the same thing *now*, in one place, with the output in front of you — which is what you want straight after an update rather than rebooting and hoping:
+
+```bash
+sudo ./install.sh            # restore everything a SteamOS update removed
+sudo ./install.sh --status   # report every subsystem, change nothing
+./install.sh --list          # which subsystems support which modes
+```
+
+It runs `hardware/kernel` first, because that restores `/usr/lib/modules` for the FRL kernel and the out-of-tree modules (`it87`, `btusb_mt7902`) need a module tree that already exists. A failing subsystem does not stop the others — after an OS update, "fifteen of seventeen restored, here are the two that did not" beats aborting on the first problem — and the script exits non-zero if any failed.
+
+Note the first boot after an update lands on the **stock Valve kernel**: the update replaces the EFI partition wholesale, taking `custom.cfg` with it. That is deliberate, not a fault. Run the command above, reboot, and you are back on the FRL kernel.
 
 ### SteamOS persistence
 

@@ -37,6 +37,15 @@ SERVICE_DEST="/etc/systemd/system/steam-machine-kernel.service"
 # Valve's default list. It names the specific file, never the directory --
 # allowlisting a directory permanently shadows all future upstream versions.
 KEEP_DEST="/etc/atomic-update.conf.d/steam-machine-kernel.conf"
+# Blacklists mt7921e. Mainline 7.2 binds it to the onboard MT7902, whose Wi-Fi
+# firmware does not exist, and its .shutdown handler then hangs the machine at
+# power-off. Specific to this kernel: Valve's 6.16 never matches the device.
+# See modprobe.d/mt7902-wifi.conf for the full chain.
+MODPROBE_DEST="/etc/modprobe.d/mt7902-wifi.conf"
+# Switches to a text VT at the start of shutdown. Without it, a power-off begun
+# while the Gamescope session still owns the display hangs -- see README.md.
+VT_UNIT="steam-machine-shutdown-vt.service"
+VT_DEST="/etc/systemd/system/$VT_UNIT"
 
 MENU_ID="frl-probe"
 
@@ -232,9 +241,13 @@ install_grub_entry() {
 install_service() {
     install -Dm644 "$REPO_DIR/systemd/steam-machine-kernel.service" "$SERVICE_DEST"
     install -Dm644 "$REPO_DIR/atomic-update.conf.d/steam-machine-kernel.conf" "$KEEP_DEST"
+    install -Dm644 "$REPO_DIR/modprobe.d/mt7902-wifi.conf" "$MODPROBE_DEST"
+    install -Dm644 "$REPO_DIR/systemd/$VT_UNIT" "$VT_DEST"
     systemctl daemon-reload
     systemctl enable steam-machine-kernel.service >/dev/null 2>&1 \
         || warn "could not enable steam-machine-kernel.service"
+    systemctl enable "$VT_UNIT" >/dev/null 2>&1 \
+        || warn "could not enable $VT_UNIT -- power-off may hang"
 }
 
 do_install() {
@@ -268,6 +281,40 @@ do_install() {
 # wiped the rootfs and the EFI partition is repaired on the next boot.
 do_boot() {
     need_root
+
+    # First, and deliberately ahead of every early return below.
+    #
+    # /etc/modprobe.d is not on SteamOS's keep list, so an A/B update deletes
+    # mt7902-wifi.conf and the very next power-off hangs the machine with no
+    # symptom until someone tries to shut it down. It also needs no rootfs
+    # unlock -- /etc is an overlayfs whose upper layer lives in /var -- and no
+    # cached kernel, so there is nothing to gate it behind.
+    #
+    # Restored by content, not just existence: a half-written file from an
+    # interrupted update would pass a -f test and still not blacklist anything.
+    if [[ -f "$REPO_DIR/modprobe.d/mt7902-wifi.conf" ]] \
+       && ! cmp -s "$REPO_DIR/modprobe.d/mt7902-wifi.conf" "$MODPROBE_DEST"; then
+        install -Dm644 "$REPO_DIR/modprobe.d/mt7902-wifi.conf" "$MODPROBE_DEST" \
+            && log "restored $MODPROBE_DEST (mt7921e blacklist)" \
+            || warn "could not restore $MODPROBE_DEST -- power-off will hang"
+    fi
+
+    # Same reasoning for the shutdown VT unit. /etc/systemd/system/*.service IS
+    # on Valve's default keep list, so this is belt-and-braces rather than the
+    # load-bearing copy -- but it costs one cmp and the failure mode it covers
+    # (a hung power-off) is the one this whole subsystem just spent three days
+    # on. Re-enabled too: the .wants symlink is separately losable.
+    if [[ -f "$REPO_DIR/systemd/$VT_UNIT" ]] \
+       && ! cmp -s "$REPO_DIR/systemd/$VT_UNIT" "$VT_DEST"; then
+        install -Dm644 "$REPO_DIR/systemd/$VT_UNIT" "$VT_DEST" \
+            && log "restored $VT_DEST" \
+            || warn "could not restore $VT_DEST -- power-off may hang"
+        systemctl daemon-reload
+    fi
+    systemctl is-enabled --quiet "$VT_UNIT" 2>/dev/null \
+        || systemctl enable "$VT_UNIT" >/dev/null 2>&1 \
+        || warn "could not enable $VT_UNIT -- power-off may hang"
+
     local kver
     kver="$(cached_kver)" || true
     if [[ -z ${kver:-} || ! -f "$CACHE_DIR/kernel.tar.zst" ]]; then
@@ -329,6 +376,13 @@ do_status() {
         && echo "yes ($efi/custom.cfg)" \
         || { [[ -f "$efi/custom.cfg" ]] && echo 'STALE -- wrong UUID or no kernel line' || echo NO; })"
     echo "boot service       : $(systemctl is-enabled steam-machine-kernel.service 2>/dev/null || echo NO)"
+    # Reported separately from "installed", because the file being present is
+    # not the same as it having taken effect: it only applies from the next
+    # boot, and a currently-bound mt7921e still hangs this session's power-off.
+    echo "shutdown VT unit   : $(systemctl is-enabled "$VT_UNIT" 2>/dev/null || echo 'NO -- power-off may hang')"
+    echo "mt7921e blacklist  : $( [[ -f $MODPROBE_DEST ]] && echo yes || echo 'NO -- power-off will hang')"
+    echo "mt7921e bound now  : $( [[ -e /sys/bus/pci/drivers/mt7921e/0000:08:00.0 ]] \
+        && echo 'YES -- this boot will still hang at power-off' || echo no)"
     # An unreadable grub.cfg must not read as "stock": grep fails the same way
     # for "no match" and "cannot open the file".
     if [[ ! -r "$efi/grub.cfg" ]]; then
@@ -385,7 +439,12 @@ do_uninstall() {
     sync
 
     systemctl disable --now steam-machine-kernel.service >/dev/null 2>&1 || true
-    rm -f "$SERVICE_DEST" "$KEEP_DEST" "$PRESET_DEST"
+    # MODPROBE_DEST goes too: uninstalling means going back to the stock Valve
+    # kernel, which never binds the MT7902 in the first place, so the blacklist
+    # is pointless there -- and leaving it behind would silently deny Wi-Fi to
+    # any future kernel that ships working MT7902 firmware.
+    systemctl disable --now "$VT_UNIT" >/dev/null 2>&1 || true
+    rm -f "$SERVICE_DEST" "$KEEP_DEST" "$PRESET_DEST" "$MODPROBE_DEST" "$VT_DEST"
     systemctl daemon-reload
 
     kver="$(cached_kver)" || true

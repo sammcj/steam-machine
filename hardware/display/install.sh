@@ -60,15 +60,25 @@ UNIT_DEST="/etc/systemd/system/$UNIT_NAME"
 REDETECT_UNITS_ENABLED=(
     steam-machine-display-hotkey.service
 )
-REDETECT_UNITS_TRIGGERED=()
+
+# Restored 2026-08-08. The native HDMI port re-detects by itself on an ordinary
+# hotplug -- switching the TV off and on brings 4K120 back unaided -- so the
+# boot trigger stayed retired. Resume is different: waking with the TV off left
+# the connector in a state where turning the TV on afterwards produced no
+# picture at all. HPD alone does not recover it; this does.
+REDETECT_UNITS_TRIGGERED=(
+    steam-machine-display-redetect-resume.service
+)
 
 # Actively removed, not merely left uninstalled -- they are enabled on this
 # machine right now, and /etc/systemd/system is on the SteamOS keep list, so
 # they would otherwise survive indefinitely. The unit files stay in the repo:
 # if a future setup puts a converter back in the chain, they are the answer.
+#
+# The boot trigger is the one that blanked the screen about a minute into Game
+# Mode, which is why it went; nothing since has needed it.
 REDETECT_UNITS_RETIRED=(
     steam-machine-display-redetect-boot.service
-    steam-machine-display-redetect-resume.service
     steam-machine-display-redetect.service
 )
 UDEV_SRC="$REPO_DIR/udev/99-steam-machine-display-redetect.rules"
@@ -245,7 +255,13 @@ ensure_redetect() {
     done
     [[ $reload -eq 1 ]] && systemctl daemon-reload
 
-    for u in "${REDETECT_UNITS_ENABLED[@]}"; do
+    # Both lists need enabling, for different reasons. ENABLED units are started
+    # directly; TRIGGERED units are pulled in by another target and do nothing
+    # without the .wants symlink that `enable` creates -- the resume re-detect is
+    # WantedBy=suspend.target and never runs otherwise. Both the unit files and
+    # the *.wants/** symlinks are on the SteamOS keep list, so this survives an
+    # A/B update.
+    for u in "${REDETECT_UNITS_ENABLED[@]}" "${REDETECT_UNITS_TRIGGERED[@]}"; do
         systemctl is-enabled --quiet "$u" 2>/dev/null || systemctl enable "$u"
     done
 

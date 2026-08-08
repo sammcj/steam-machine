@@ -775,19 +775,33 @@ connector auto-detection. One thing calls it:
 | --- | --- | --- | --- |
 | **Shift+Esc** | `steam-machine-display-hotkey.service` | any time | everything — the escape hatch that works when the screen is already black |
 
-#### Retired triggers (2026-08-06)
+#### Retired triggers (2026-08-06), and the one restored (2026-08-08)
 
 Three automatic triggers used to fire as well. They existed because the
 **DP→HDMI converter swallowed hot-plug detect** — the GPU never saw the TV come
 back, so something had to force a re-probe on its behalf. On the native HDMI
-port the TV asserts real HPD and amdgpu re-detects by itself, so all three now
-do nothing except blank the screen for a second at a predictable moment.
+port the TV asserts real HPD and amdgpu re-detects by itself, so two of the
+three did nothing except blank the screen for a second at a predictable moment.
 
-| Retired trigger | Unit | Was |
-| --- | --- | --- |
-| Controller connect | udev rule → `steam-machine-display-redetect.service` | DualSense connects, USB or BT |
-| Boot | `steam-machine-display-redetect-boot.service` | +25 s after `graphical.target` |
-| Resume | `steam-machine-display-redetect-resume.service` | +8 s after `suspend.target` |
+| Trigger | Unit | Fires | Status |
+| --- | --- | --- | --- |
+| Controller connect | udev rule → `steam-machine-display-redetect.service` | DualSense connects, USB or BT | retired |
+| Boot | `steam-machine-display-redetect-boot.service` | +25 s after `graphical.target` | retired — this is the one that blanked the screen a minute into Game Mode |
+| Resume | `steam-machine-display-redetect-resume.service` | +8 s after `suspend.target` | **restored** |
+
+**Resume is not the same case as hotplug, and retiring it was wrong.** An
+ordinary hotplug on the native port recovers unaided — switching the TV off and
+on brings 4K120 straight back. Waking from suspend with the TV already off does
+not: the connector comes back in a state where turning the TV on afterwards
+produces no picture at all, and HPD does not rescue it. Found on 2026-08-08
+after an overnight suspend.
+
+Note that the two lists are enabled differently. Units in
+`REDETECT_UNITS_ENABLED` are started directly; units in
+`REDETECT_UNITS_TRIGGERED` are pulled in by another target and do **nothing**
+without the `.wants` symlink that `systemctl enable` creates. `install.sh`
+originally enabled only the first list, so a unit moved into the second would
+have been installed and silently inert. Both lists are enabled now.
 
 `install.sh` actively **retires** them (`retire_redetect_triggers`): disables
 each unit, deletes its unit file, and deletes the udev rule. That runs on

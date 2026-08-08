@@ -60,9 +60,23 @@ menuentry 'SteamOS -- 4K120 HDMI (mainline kernel, fallback initramfs)' --class 
 
 # Boot this by default, but only when GRUB has not been handed a one-shot
 # target. 00_header consumes `next_entry` into `default` and sets `boot_once`,
-# so honouring boot_once keeps `grub-reboot` working -- which is the documented
-# way to make a single attempt at a different entry without changing the
-# default.
+# so honouring boot_once is the correct thing to do here.
+#
+# `grub-reboot` still does not work here, but not for the reason first assumed.
+# 00_header guards it with `if [ -s $prefix/grubenv ]` and no grubenv exists on
+# this ESP, so creating one with `grub-editenv create` and setting `next_entry`
+# looked like the fix. It did not take: `next_entry` was still set after the
+# next boot, so GRUB never consumed it.
+#
+# That boot also hung at a blank screen after the firmware logo, which was
+# blamed on the grubenv at the time. **That was wrong.** The same blank-screen
+# boot happened again later with no grubenv present at all. It correlates with
+# the preceding forced power-off (the 4-second hold used to escape the S5 hang),
+# not with anything in this file -- two for two, and it clears on a second power
+# cycle. See ../README.md under "OPEN: power-off hangs".
+#
+# To boot the stock Valve kernel once, just pick it in the menu -- the timeout
+# below is 10 seconds precisely so that is possible.
 #
 # amdgpu.dcfeaturemask=0x402 above appears ONLY on this entry. Setting it via
 # GRUB_CMDLINE_LINUX would inject it into the stock Valve entries too, changing

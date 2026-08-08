@@ -12,7 +12,7 @@ Full measurement capture, with the raw debugfs output it was read from: [`frl-4k
 
 **It survives SteamOS updates** (since 2026-08-06), via a cached artefact tarball under `/home` and a keep-listed systemd unit that reinstalls whatever an A/B update deleted. It is also the **default boot entry**, with a 10-second menu to pick the stock Valve kernel instead. See [Install](#install) and [How it survives updates](#how-it-survives-updates).
 
-> **Known problem: the machine does not power off.** Two for two on 2026-08-06 and 07 — Steam → Shutdown completes the whole systemd sequence and then hangs before S5, needing a 4-second power-button hold. Reboots are fine. Open, cause not established, correlates with the VRR patches. Read [OPEN: power-off hangs](#open-power-off-hangs-2026-08-06-2026-08-07) before using this daily.
+> **Fixed 2026-08-08: the machine would not power off.** Eight hangs over three days, from a kernel that otherwise worked perfectly. Two independent causes, each of which had to be removed before the machine would reach S5: `mt7921e` binding an MT7902 whose Wi-Fi firmware does not exist, and the Gamescope session holding the GPU as shutdown began. See [SOLVED: power-off hangs](#solved-power-off-hangs-2026-08-06-to-2026-08-08).
 
 ## TL;DR
 
@@ -362,7 +362,7 @@ So the gap is real rather than cosmetic, which is what makes the DP-adapter idea
 
 The TV has four HDMI inputs and the card has spare DisplayPort outputs. A DP→HDMI adapter with CEC tunnelling, plugged into an *unused* TV input, should register `/dev/cec0` and put the machine on the TV's CEC bus - while 4K120 FRL keeps running over the native HDMI port on the input the TV is actually displaying. CEC is a bus, not a per-input channel, so control should work regardless of which input is selected.
 
-Worth trying with the UGREEN 80397 already in the parts bin, since it costs nothing: plug it into a spare TV input and check for `/dev/cec0`. Unknowns: whether that specific model implements CEC tunnelling at all (the toolkit's model is not identified), and whether the TV reacts badly to a second source it is not showing. If it works, the `steamos-cec-toolkit` units already installed on this machine become live.
+Worth trying with the UGREEN 80397 already in the parts bin, since it costs nothing: plug it into a spare TV input and check for `/dev/cec0`. Unknowns: whether that specific model implements CEC tunnelling at all (the toolkit's model is not identified), and whether the TV reacts badly to a second source it is not showing. The toolkit itself was removed on 2026-08-08 (see the root README), so this would mean reinstalling it — worth doing only once an adapter has actually produced a `/dev/cec0`.
 
 ### VRR: solved (2026-08-06)
 
@@ -620,114 +620,203 @@ Specifically, be aware that:
 - **7.2-rc6 is a release candidate.** It gets no stable or CVE fixes. Rebuild at 7.2 final.
 - **You lose Valve's kernel patches** while running it. See [the gap](#the-probe-kernel-is-mainline-so-valves-patches-are-gone-m) for what that costs on a desktop.
 - **A SteamOS update leaves you on the stock kernel for one boot.** Expected, not a fault - see [After a SteamOS update](#after-a-steamos-update).
-- **Power-off hangs. OPEN, and the most serious known problem with this kernel.** Two for two so far. See below.
+- **Power-off hangs. Fixed 2026-08-08**, but by two changes rather than one — an `mt7921e` blacklist and a shutdown-time VT switch. Both are installed and kept by `install.sh`; if either goes missing the hang returns. See below.
 
-### OPEN: power-off hangs (2026-08-06, 2026-08-07)
+### SOLVED: power-off hangs (2026-08-06 to 2026-08-08)
 
-**Symptom.** Steam → Shutdown runs the full sequence and then the machine never actually powers off. Fans and lights stay on, there is no network, the display outputs a black frame, and a short press of the power button does nothing. Only a 4-second hold clears it. **Reboots are unaffected** — those have worked every time.
+**Symptom.** Steam → Shutdown, `systemctl poweroff` and SysRq-o all run the full sequence and then the machine never powers off. Fans and lights stay on, there is no network, the TV keeps carrying a live HDR signal, and a short press of the power button does nothing. Only a 4-second hold clears it. **Reboots are unaffected.** Eight occurrences.
 
-Seen twice, on consecutive nights. Both hangs are identical in the logs.
+**Two causes, found one after the other.** The first is `mt7921e` binding the onboard MediaTek MT7902 Wi-Fi, whose `.shutdown` handler never returns. The second is the Gamescope session still owning the GPU when shutdown begins.
 
-What the logs establish, identically for both:
+> **Confirmed 2026-08-08** by a shutdown from the SteamOS menu — the path that had failed all day — with LACT running and nothing else changed. There were **two** independent blockers, and removing the first only revealed the second.
 
-| Evidence | What it rules in or out |
-|---|---|
-| `wtmp` has a clean `shutdown system down` record | systemd completed its whole shutdown sequence |
-| `BTRFS ... last unmount of filesystem`, and no fs recovery on the next boot | filesystems were unmounted cleanly |
-| No journal file created between the shutdown and the next boot | nothing reached userspace in that window - a Wake-on-LAN packet sent during it produced no boot |
-| `ramoops` is registered and `/sys/fs/pstore` is **empty** | no panic and no oops was captured, so this was a hang rather than a crash |
-| `/sys/class/net/enp9s0/device/power/wakeup` = `enabled` | WoL was armed; its failing to wake the machine is a symptom, not a misconfiguration |
+The chain, each link verified:
 
-Read together: systemd finished, then the kernel wedged in the final power-off and the machine never reached S5. That accounts for every symptom at once - lights on because it never powered down, no SSH because the network stack was gone, a black frame because the display was already torn down, and a dead power button because the kernel was past the point where it handles ACPI events. On the first occurrence a Wake-on-LAN packet was sent during the hang and did nothing, which fits: the NIC was still in its normal running state, not in WoL standby.
+1. **Mainline 7.2 added the device ID.** Commit `c26319afb5fb` ("wifi: mt76: mt7921: add MT7902 PCIe device support") put `14c3:7902` in `mt7921e`'s PCI table. Valve's 6.16 module matches `14c3:7920` only — so on the stock kernel nothing binds the card at all, which is the entire reason stock powers off cleanly and this kernel does not.
 
-#### What the second occurrence ruled out
+   ```
+   # 6.16 (Valve)     modinfo -F alias mt7921e -> pci:v000014C3d00007920sv*sd*bc*sc*i*
+   # 7.2-rc6 (FRL)    modinfo -F alias mt7921e -> pci:v000014C3d00007902sv*sd*bc*sc*i*
+   #                                              pci:v000014C3d00007920sv*sd*bc*sc*i*
+   ```
 
-The first hang followed a ~3.5 hour gaming session, so load and session length looked like the obvious variables. **They are not.** The second followed a 37-minute desktop session with no game running at all. Also dead: the theory that replacing `/usr/lib/modules/` under the running kernel caused it - that had happened before the first hang and not before the second.
+2. **Probe fails, because the firmware does not exist.** MediaTek have never published MT7902 *Wi-Fi* firmware to linux-firmware — only the Bluetooth blob, `BT_RAM_CODE_MT7902_1_1_hdr.bin`, which is present and works. So:
 
-#### What it correlates with
+   ```
+   mt7921e 0000:08:00.0: Direct firmware load for mediatek/WIFI_RAM_CODE_MT7902_1.bin failed with error -2
+   mt7921e 0000:08:00.0: Direct firmware load for mediatek/WIFI_MT7902_patch_mcu_1_1_hdr.bin failed with error -2   (x10)
+   mt7921e 0000:08:00.0: hardware init failed
+   ```
 
-`wtmp` gives a clean history of every power-off on this kernel:
+   There is no `wlan` interface on this machine and there is no prospect of one. Nothing is being given up by turning this off.
 
-| When | Kernel | Result |
-|---|---|---|
-| 17:39 → 17:40 | FRL, pre-VRR | powered off (1 min) |
-| 17:59 → 18:02 | FRL, pre-VRR | powered off (2 min) |
-| 21:45 → 22:12 | FRL + VRR (`0002`-`0005`) | **hung** |
-| 22:48 → 08:07 | FRL + VRR + `0006` | **hung** |
+3. **The device stays bound anyway.** `/sys/bus/pci/drivers/mt7921e/0000:08:00.0` exists despite the failed probe. The same series carries `346dac35b138` ("fix resource leak in probe error path"), so this error path is known-rough and only weeks old.
 
-Two clean power-offs before the VRR series, two hangs after. `n` is small and this is a correlation, not a mechanism - but it is the sharpest signal available and it points at `0002`-`0005` rather than at `0006` or at FRL itself.
+4. **The shutdown handler is a full teardown.** In `drivers/net/wireless/mediatek/mt76/mt7921/pci.c`:
 
-A second, independent hint points the same way: in **both** hangs the last meaningful kernel messages are `HDR SB:` infopacket dumps, logged immediately after the final BTRFS unmount. That print is upstream (`88694af9e4d1`), not one of these patches, but it shows the HDR metadata path is being written to during display teardown at exactly the moment things stop - and `0003`/`0005` add VTEM and HF-VSIF infopacket handling on that same path.
+   ```c
+   static void mt7921_pci_shutdown(struct pci_dev *pdev)
+   {
+   	mt7921_pci_remove(pdev);
+   }
+   ```
 
-#### The A/B test that would settle it
+   `mt7921_pci_remove()` talks to the firmware MCU. Run against a device whose MCU was never brought up, it waits on a reply that cannot arrive. `device_shutdown()` never returns, so `kernel_power_off()` never reaches `pr_emerg("Power down\n")` and the rails never drop.
 
-The pre-VRR artefact is still cached, so this is one reboot each way:
+**Fix for the first blocker.** `modprobe.d/mt7902-wifi.conf` blacklists `mt7921e`. Installed by `install.sh` to `/etc/modprobe.d/`, listed in the atomic-update keep file, and re-installed by `install.sh --boot` ahead of every early return — `/etc/modprobe.d` is not on SteamOS's default keep list, and losing this file means the next power-off hangs with no other symptom.
 
-```bash
-# to the pre-VRR kernel (4K120, no VRR)
-cp ~/.cache/frl-kernel/kernel.tar.zst.pre-vrr ~/.cache/frl-kernel/kernel.tar.zst
-sudo ./install.sh --install && reboot
-# then: Steam -> Shutdown, and see whether it powers off
+Bluetooth is untouched: that is a **separate USB device** (`0e8d:7902`, `hci0`) driven by the out-of-tree `btusb_mt7902` — see [hardware/bluetooth/](../bluetooth/README.md). Same chip, same `7902` in the ID, different bus, different driver.
 
-# back again
-cp ~/.cache/frl-kernel/kernel.tar.zst.pre-frlrestore ~/.cache/frl-kernel/kernel.tar.zst
-sudo ./install.sh --install
+#### The second blocker: the Gamescope session holding the GPU
+
+With `mt7921e` blacklisted the machine still hung — from the Steam menu and from a plain `systemctl poweroff` alike. What made the difference was `chvt 4` beforehand:
+
+| Condition | Result |
+| --- | --- |
+| `chvt` to a text VT first | powered off, **3/3** |
+| No VT switch | hung, **2/2** |
+
+Not a timing artefact: the deciding run had `initcall_debug` off and printk at its stock `1 4 1 4`, so the only thing that changed was the active VT.
+
+`gamescope` holds `/dev/dri/card0` as DRM master on `VTNr=1`, with `Xwayland`, `steam`, `steamwebhelper` and `mangoapp` on the render nodes behind it. Switching away revokes that master and forces a modeset back to fbcon. Shut down without doing so and something in the GPU teardown never completes.
+
+This also explains why the earlier `--no-gpu` test was so misleading. It unloaded amdgpu entirely and still hung, which read as "the GPU is exonerated" — but `mt7921e` was still in the device list at the time, so it hung for an unrelated reason and the display driver was wrongly cleared.
+
+**`systemd/steam-machine-shutdown-vt.service` is the workaround**: `chvt 4` at the *start* of shutdown, via `Conflicts=shutdown.target` plus `Before=shutdown.target`, so its `ExecStop` fires while the session is still up — matching the state the manual tests were run in. VC4 and not VC2 because `fbcon=vc:4-6` means only VCs 4-6 render.
+
+**It is a workaround, not a fix.** The real bug is presumably in amdgpu's shutdown path on 7.2, and has not been identified. Two things follow: the console text you now see during shutdown is expected rather than a fault, and this should be re-tested at 7.2 final in case it is fixed upstream.
+
+LACT was suspected here and is **not** implicated — it is a root daemon holding both render nodes for the whole uptime and outliving the session, which fits the profile exactly, but the confirming shutdown was done with it running.
+
+#### How it was found: `initcall_debug`
+
+Everything before this was elimination, and elimination was the wrong tool — it can only ever say what the cause is *not*.
+
+`device_shutdown()` in `drivers/base/core.c` prints each device's name **before** calling its handler, but only when `initcall_debug` is set:
+
+```c
+if (dev->bus && dev->bus->shutdown) {
+        if (initcall_debug)
+                dev_info(dev, "shutdown\n");
+        dev->bus->shutdown(dev);
+}
 ```
 
-Worth doing the **stock Valve kernel** first, though - one arrow-key up in the GRUB menu, no install step, and it establishes whether power-off works at all on this hardware and firmware. If the stock 6.16 kernel hangs too, none of the above matters and this is a board or firmware problem, not a patch problem.
+So the last name on screen *is* the culprit, directly. `/sys/module/kernel/parameters/initcall_debug` is mode `0644`, so this needs no rebuild and no reboot — `bin/poweroff-test.sh` now sets it in every mode. The frozen console ended:
 
-#### Third occurrence (2026-08-07 09:17) - both eliminations tested and failed
+```
+r8169 0000:09:00.0: shutdown
+mt7921e 0000:08:00.0: shutdown
+```
 
-The one useful hang so far, because it was the first run as a controlled test rather than observed after the fact. Both candidate causes were removed beforehand and it hung anyway:
+One test, after seven that each removed a component and learnt nothing.
 
-| Removed before this attempt | Result |
+**Two things had to be fixed before the screen could be read at all**, and both cost days:
+
+- SteamOS's `steamenv_boot` GRUB module force-appends `loglevel=3 splash quiet` and **strips `plymouth.enable=0`**, so editing the command line does not work. It has to be undone at runtime.
+- `fbcon=vc:4-6` means the framebuffer console renders only VCs 4–6. On VC1 there is nothing to see even with plymouth gone, hence `chvt 4`.
+
+#### What was eliminated on the way, and why none of it mattered
+
+Every one of these was a real test that hung anyway:
+
+| Removed | Verdict |
 | --- | --- |
-| BTRFS array masked and unmounted | still hung - **eliminated** |
-| `steamos-cec-before-sleep.service` disabled | still hung - **eliminated** |
+| BTRFS SATA array (unmounted, unit masked) | not the cause |
+| `amdgpu` (fully unloaded, LACT stopped first to free the DRM nodes) | not the cause |
+| `r8169` (`ip link down` + `modprobe -r`) | not the cause |
+| Wake-on-LAN (`power/wakeup` = `disabled`) | not the cause |
+| systemd (SysRq-o bypasses it entirely) | not the cause |
+| `it87`, `btusb_mt7902` out-of-tree modules | not the cause |
+| The six FRL/VRR patches | all inside `amdgpu`, already unloaded above |
+| Board and firmware | stock Valve 6.16 powers off cleanly on identical hardware |
 
-Two further facts from it:
+The BTRFS array can be restored — see [hardware/storage/](../storage/README.md#temporarily-disabled-for-the-power-off-hang).
 
-- **The session was ten minutes long** (09:07-09:17), in Desktop mode. Load and uptime are now out three times over.
-- **The HDMI link was still up and carrying HDR at the hang.** The TV showed a black frame but not "No Signal", so the GPU never released the display. This is the sharpest clue yet and it agrees with the `HDR SB:` infopacket dumps being the last meaningful kernel messages in the two earlier hangs.
+#### Corrections: three conclusions in this section were wrong
 
-`/sys/fs/pstore` empty again - a hang, not a panic, three for three.
+Recorded because each one cost real time, and the reasoning behind each is a trap worth recognising again.
 
-#### `bin/poweroff-test.sh` - bisecting it without a trip to the living room
+**"It is the ACPI S5 transition, and nothing in software above it."** Wrong. The argument was that `--sysrq` bypasses systemd and still hangs, therefore the fault is below the kernel. `--sysrq` does bypass systemd, but SysRq-o still calls `kernel_power_off()`, which still runs `device_shutdown()` — the very thing that was hanging. It never isolated what it claimed to. The decisive fact was available all along: `pr_emerg("Power down\n")` at `kernel/reboot.c` is printed immediately *before* `machine_power_off()`, and it has never once appeared. The hang was always upstream of the S5 write.
 
-Each mode removes one layer, and all of them are run over SSH. A marker is written to `/home/deck/.poweroff-test` *before* the attempt, so a forced power-cycle does not lose which test it was.
+**"There is a VRR correlation."** Wrong, and retracted earlier. `wtmp` records `shutdown system down` when *systemd* finishes, which it does for the hangs too, so the "clean" power-offs it appeared to show were never observed reaching S5.
+
+**"The last message names the culprit."** Wrong method, not just a wrong answer. `r8169 ... Link is Down` was the last line for several runs, so the NIC looked implicated; unloading it simply removed that message and changed nothing. Most drivers print nothing at shutdown, so the last *voluntary* message says only which driver was chatty. `initcall_debug` prints them all, which is why it settled the question in one attempt.
+
+The pattern in all three: reasoning from absence of evidence on a system that had been configured to produce no evidence.
+
+#### Also open: blank screen on the boot *after* a forced power-off
+
+Three times, the boot following a 4-second power-button hold has stopped at a blank screen after the firmware logo, before the GRUB menu, needing another power cycle to clear.
+
+The first occurrence was blamed on a `grubenv` created for `grub-reboot`. **That was wrong** — later ones happened with no grubenv present. It correlates with an unclean power cut, and one followed a clean reboot, so that correlation is not airtight either. It always clears on the next power cycle. If the `mt7921e` fix holds, forced power-offs stop happening and this should go away with them; if it recurs after that, it is independent.
+
+#### `bin/poweroff-test.sh`
+
+Kept, because it is what made this diagnosable over SSH. Every mode writes a marker to `/home/deck/.poweroff-test` *before* the attempt, so a forced power-cycle does not lose which test it was, and every mode now sets up a readable console (`chvt 4`, masks the plymouth shutdown units, raises printk, enables `initcall_debug`).
 
 ```bash
 sudo ./bin/poweroff-test.sh --report     # what happened last time (read-only, safe)
-sudo ./bin/poweroff-test.sh --plain      # control: an ordinary poweroff
-sudo ./bin/poweroff-test.sh --no-gpu     # stop the session, unbind fbcon, unload amdgpu, then poweroff
-sudo ./bin/poweroff-test.sh --sysrq      # skip systemd: SysRq sync + remount-ro + poweroff
+sudo ./bin/poweroff-test.sh --plain      # ordinary poweroff, with the console readable
+sudo ./bin/poweroff-test.sh --no-lact    # stop the GPU control daemon
+sudo ./bin/poweroff-test.sh --no-gpu     # ... and unload amdgpu
+sudo ./bin/poweroff-test.sh --no-net     # down and unload r8169
+sudo ./bin/poweroff-test.sh --no-netwake # disarm Wake-on-LAN
+sudo ./bin/poweroff-test.sh --sysrq      # SysRq sync + remount-ro + poweroff
 ```
 
-**`--no-gpu` is the discriminating one.** It stops the graphical session, unbinds every non-dummy vtcon so fbcon releases the framebuffer, and unloads `amdgpu` before calling `poweroff`. If the driver will not unload it refuses to continue rather than burning a power-cycle on an inconclusive run.
+`--no-gpu` needs `--no-lact` first: `lactd.service` holds both DRM render nodes open for the whole uptime and `systemctl isolate multi-user.target` does not clear it, because it is `WantedBy=multi-user.target` rather than part of the graphical session.
 
-| `--no-gpu` result | Conclusion |
+Unmask the plymouth shutdown units when finished debugging:
+
+```bash
+sudo systemctl unmask plymouth-poweroff.service plymouth-reboot.service plymouth-halt.service
+```
+
+#### Why the hangs left no evidence in pstore
+
+`/sys/fs/pstore` was empty after every one, and the reason is not that nothing went wrong:
+
+```
+# CONFIG_PSTORE_CONSOLE is not set
+```
+
+Inherited from Valve's config. Without it the `ramoops` console backend does not exist, so `console_size=4096` records nothing and only a panic or oops can land in pstore. These were hangs, so there was never going to be anything there.
+
+SysRq at the hang is no use either — by then the CPU is spinning in a driver with the shutdown path stalled, which is also why a short power-button press does nothing (systemd has exited; there is no logind left to receive it). The 4-second hold works because it is not software at all: it is the chipset's power-button override cutting the rails.
+
+A kernel with `CONFIG_PSTORE_CONSOLE=y` (plus `PSTORE_FTRACE` and `PSTORE_PMSG`) was built and staged to `/work/stage-pstore` on 2026-08-08 but **never deployed** — reading the screen turned out to be enough. It is worth folding into the next rebuild anyway, since it costs nothing and makes the next silent hang self-documenting.
+
+### Hardware-specific options, and what 7.2 adds for this machine
+
+Audited 2026-08-08, because `make olddefconfig` gives every option added since 6.16 its *Kconfig default* rather than a deliberate choice - so anything new for RDNA4 or AM5 would be off unless upstream turned it on.
+
+**Nothing is missing.** Across every `CONFIG_` option mentioning AMD, RADEON, DRM, HSA, IOMMU, ACPI, PCI, EDAC or SENSORS that exists in *both* configs, exactly one value differs: `ACPI_PLATFORM_PROFILE` `m` → `y`, which is 7.2 making it built-in.
+
+| Area | State |
 | --- | --- |
-| Powers off cleanly | The fault is in amdgpu's teardown path. The VRR series becomes the prime suspect and the A/B below is worth the reboots |
-| Hangs anyway | amdgpu is not the cause. Stop bisecting patches and look at ACPI/firmware - try `--sysrq` next, and the stock Valve kernel after that |
+| 9800X3D / B850 | `AMD_3D_VCACHE=m`, `X86_AMD_PSTATE=y` (default mode 3, guided), `AMD_NODE=y`, `AMD_ATL=m`, `EDAC_AMD64=m`, `GIGABYTE_WMI=m`, `PINCTRL_AMD=y`, `I2C_PIIX4=m` |
+| Navi 48 | `DRM_AMDGPU=m`, `DRM_AMD_DC=y`, `DRM_AMD_DC_FP=y`, `HSA_AMD=y`, `HSA_AMD_SVM=y` |
+| Off, and correctly so | `DRM_AMDGPU_SI`/`_CIK` (GCN 1/2 legacy), `HSA_AMD_P2P` (multi-GPU DMA), `DRM_RAS` (new in 7.2, aimed at datacentre parts) |
 
-`--sysrq` is the follow-up either way: it calls the kernel's own poweroff path with systemd out of the picture. If **that** hangs, nothing in userspace or in the display driver is responsible.
+The interesting differences are **runtime module parameters**, not Kconfig.
 
-#### The BTRFS array is disabled while this runs (2026-08-07)
+**New in 7.2, absent from Valve's 6.16:**
 
-The secondary BTRFS RAID1 at `/home/deck/SATA` is unmounted and its mount unit masked, to take it out of the shutdown path - see [hardware/storage/](../storage/README.md#temporarily-disabled-for-the-power-off-hang) for the commands to restore it.
+| Parameter | Notes |
+| --- | --- |
+| `hdmi_hpd_debounce_delay_ms` | Writable at runtime (`0644`). Default `0` (off); the help text calls 1500 common. Distinguishes a real unplug (longer than the delay) from a spontaneous RX HPD toggle (shorter), so brief drops no longer tear the mode down. Directly relevant to this TV - see [display](../display/README.md) for the wake-with-the-TV-off case |
+| `ptl` | Boot-time only (`0444`), `-1` auto / `0` disable (default) / `1` enable / `2` permanently disable |
 
-This is a cheap elimination rather than a real suspect. The array has been in `/etc/fstab` since 2026-08-03, so it was mounted during the two **successful** power-offs on 2026-08-06 as well as during both hangs, and it holds 160 KiB - there is nothing to flush. Both hangs also logged clean unmounts before wedging. If a hang happens with the array masked, that is settled and the mask can come off.
+**Valve-only, and gone on mainline** - these are their patches, not upstream:
 
-#### Capturing the next one
+| Parameter | What it did |
+| --- | --- |
+| `allm_mode` | ALLM trigger mode: 0 disable, 1 enable (default), 2 force |
+| `hdmi_vrr_desktop_mode` | HDMI VRR in desktop mode, on by default |
+| `freesync_pcon_allow_all` | Let any DP→HDMI adapter past the FreeSync whitelist. Moot here - the adapter is out of the chain |
 
-Power-cycling blind loses the evidence. Before the next shutdown:
-
-**No rebuild is needed for any of this** - the debug knobs are already compiled in, inherited from Valve's config: `PM_DEBUG=y`, `PM_TRACE=y`, `PM_TRACE_RTC=y`, `MAGIC_SYSRQ=y`, `DETECT_HUNG_TASK=y`, `PSTORE_RAM=m`.
-
-- Leave the **TV on** through it, so a panic or a stuck task is readable on the console.
-- Drop `quiet splash` from the FRL entry's command line in `grub/custom.cfg.in` and re-run `--install`, so shutdown messages are not hidden behind plymouth.
-- Add `sysrq_always_enabled=1`, then at the hang use **Alt+SysRq+W** (blocked tasks) and **Alt+SysRq+T** (all tasks) - `ramoops` is armed and will carry the output across the reboot.
-- Check `/sys/fs/pstore` on the next boot. It has been **empty both times**, which is why this is classed as a hang rather than a panic.
+Worth knowing for ALLM specifically: mainline has **no knob** for it, so there is nothing to set. It rides the HF-VSIF path the VRR patches add.
 
 ### Kernel config: what came from Valve and what did not
 

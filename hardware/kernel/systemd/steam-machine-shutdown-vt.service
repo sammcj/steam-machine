@@ -1,0 +1,47 @@
+[Unit]
+Description=Switch to a text VT at the start of shutdown (works around a power-off hang)
+Documentation=file:///home/deck/git/steam-machine/hardware/kernel/README.md
+# WORKAROUND, not a fix. See README.md under "Power-off hangs".
+#
+# On the mainline FRL kernel, a power-off started while the Gamescope session
+# still owns the display hangs: gamescope holds /dev/dri/card0 as DRM master on
+# tty1, and something in the GPU teardown never completes. Switching to a text
+# VT first revokes that master and forces a modeset back to fbcon, after which
+# power-off completes every time.
+#
+# Measured before this unit existed: 3/3 clean power-offs with a manual
+# `chvt 4` beforehand, 2/2 hangs without it. The mechanism is inferred from
+# gamescope being the DRM master on VTNr=1; it has not been proven, and the
+# real bug is presumably in amdgpu's shutdown path on 7.2.
+#
+# VC4 rather than VC2, because SteamOS boots with `fbcon=vc:4-6` -- the
+# framebuffer console renders ONLY VCs 4-6, so a switch to VC2 would give a
+# blank screen and hide any shutdown messages.
+#
+# The Conflicts/Before pair is what makes this run at the *start* of shutdown
+# rather than the end: Conflicts= means activating shutdown.target stops this
+# unit, and Before= means that stop must finish before shutdown.target is
+# reached. ExecStop therefore fires while the session is still up, which is the
+# state the manual tests were run in. A unit ordered After=final.target would
+# fire long after gamescope had exited, which is not what was measured.
+After=multi-user.target
+Conflicts=shutdown.target
+Before=shutdown.target
+ConditionPathExists=/usr/bin/chvt
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Nothing to do at boot. The unit exists only to have an ExecStop.
+ExecStart=/bin/true
+ExecStop=-/usr/bin/chvt 4
+# Give the modeset a moment to land before systemd carries on tearing the
+# session down. Without this the switch and the session stop race, and the
+# manual tests always had seconds of human delay in between.
+ExecStop=-/usr/bin/sleep 1
+# `-` on both: a failed VT switch must never block shutdown. The whole point of
+# this unit is to make shutdown work, so it cannot become a new way to wedge it.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
