@@ -41,10 +41,20 @@ subsystems() {
     done
 }
 
-# Not every subsystem has every mode -- system/btop has no --boot, for instance.
-# Grepping the script is how that is detected, so a subsystem that gains a mode
-# later is picked up with no change here.
-supports() { rg -q -- "$2" "$1/install.sh" 2>/dev/null; }
+# Not every subsystem has every mode -- system/btop and system/shell have no
+# --boot, because both live entirely in /home and cannot be lost to an A/B
+# update. Detected from the script itself so a subsystem that gains a mode later
+# is picked up with no change here.
+#
+# ONLY the case block, and only as a real arm (`--boot)` or `--boot|`). An
+# earlier version grepped the whole file and reported system/shell as having
+# --boot because of a comment reading "no --boot self-heal" -- which then failed
+# the run with `unknown option: --boot`. A mode mentioned in prose is not a mode.
+supports() {
+    local script="$1/install.sh" mode="$2"
+    [[ -f $script ]] || return 1
+    sed -n '/^case /,/^esac/p' "$script" | grep -qE -- "${mode}[[:space:]]*[|)]"
+}
 
 do_list() {
     printf '%-28s %-7s %s\n' SUBSYSTEM --boot --status

@@ -632,10 +632,11 @@ Specifically, be aware that:
 
 The chain, each link verified:
 
-1. **Mainline 7.2 added the device ID.** Commit `c26319afb5fb` ("wifi: mt76: mt7921: add MT7902 PCIe device support") put `14c3:7902` in `mt7921e`'s PCI table. Valve's 6.16 module matches `14c3:7920` only — so on the stock kernel nothing binds the card at all, which is the entire reason stock powers off cleanly and this kernel does not.
+1. **Mainline 7.2 added the device ID.** Commit `c26319afb5fb` ("wifi: mt76: mt7921: add MT7902 PCIe device support") put `14c3:7902` in `mt7921e`'s PCI table. No Valve kernel has it — 6.16 matched `14c3:7920` only, and 6.18.42 (shipped 2026-08-08) adds `7922` and `7961` but still not `7902`. So on the stock kernel nothing binds the card at all, which is the entire reason stock powers off cleanly and this kernel does not. **Re-check this after every SteamOS kernel bump**: the day Valve ship a kernel carrying `7902`, stock inherits the same hang, and the blacklist is what prevents it.
 
    ```
-   # 6.16 (Valve)     modinfo -F alias mt7921e -> pci:v000014C3d00007920sv*sd*bc*sc*i*
+   # 6.18.42 (Valve)  modinfo -F alias mt7921e -> pci:v000014C3d00007920sv*sd*bc*sc*i*
+   #                                              (plus 7922, 7961 -- no 7902)
    # 7.2-rc6 (FRL)    modinfo -F alias mt7921e -> pci:v000014C3d00007902sv*sd*bc*sc*i*
    #                                              pci:v000014C3d00007920sv*sd*bc*sc*i*
    ```
@@ -801,7 +802,7 @@ Audited 2026-08-08, because `make olddefconfig` gives every option added since 6
 
 The interesting differences are **runtime module parameters**, not Kconfig.
 
-**New in 7.2, absent from Valve's 6.16:**
+**New in 7.2, absent from Valve's kernel:**
 
 | Parameter | Notes |
 | --- | --- |
