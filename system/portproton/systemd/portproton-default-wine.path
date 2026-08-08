@@ -1,0 +1,14 @@
+[Unit]
+Description=Watch PortProton's dist directory for new GE-Proton builds
+Documentation=file:///home/deck/git/steam-machine/system/portproton/README.md
+
+[Path]
+# PathChanged on a directory fires when its entries change -- i.e. when a new
+# GE-Proton subdirectory is created. That is the *start* of extraction, not the
+# end, which is why --update waits for the tree to stop changing before it
+# writes anything.
+PathChanged=/home/deck/PortProton/data/dist
+Unit=portproton-default-wine.service
+
+[Install]
+WantedBy=default.target

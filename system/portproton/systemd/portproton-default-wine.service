@@ -1,0 +1,15 @@
+[Unit]
+Description=Point PortProton's default wine version at the newest installed GE-Proton
+Documentation=file:///home/deck/git/steam-machine/system/portproton/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/home/deck/git/steam-machine/system/portproton/install.sh --update
+# --update can block for up to two minutes waiting for an extraction to finish.
+TimeoutStartSec=300
+
+[Install]
+# Triggered by portproton-default-wine.path while logged in; wanted by
+# default.target as well so a build that landed while this session was not
+# running (Flatpak update, offline install) is picked up at the next login.
+WantedBy=default.target
