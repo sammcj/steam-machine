@@ -41,6 +41,14 @@ Pin the tag matching the stock kernel you are comparing against — `6.18.42-val
 
 Valve's 6.18 driver compiles against 7.2-rc6 with **no source changes**, which is the part worth re-testing rather than assuming after any rebase.
 
+**A freshly built `hid-steam.ko` may refuse to load with `failed to validate module [hid_steam] BTF: -22`.** The config carries `DEBUG_INFO_BTF=y`, and the `.BTF` section `pahole` generates for a module built on its own is one the running kernel's validator rejects. BTF only feeds BPF tooling — nothing this driver needs — so strip it:
+
+```bash
+objcopy --remove-section=.BTF hid-steam.ko hid-steam.ko.nobtf
+```
+
+Install the stripped copy. Two related things bite at the same moment: `/usr/lib/modules` is on the read-only rootfs (unlock first), and any module installed by hand is **not** in the cache tarball until `sudo ./install.sh --cache` runs — `--status` reports `cache freshness: STALE` and names the files that would be lost at the next OS update.
+
 ## Why 0006 matters here more than its size suggests
 
 `verify_link_capability_non_destructive()` in `link_detection.c` assigned the *DP* `verified_link_cap` on the HDMI branch and left `frl_verified_link_cap` stale, so `frl_link_rate` read back as `HDMI_FRL_LINK_RATE_DISABLE` and the stream fell back to TMDS. A TV that gets switched off and on is a routine HPD event on this machine, and the symptom would be a silent drop to 4K60 with no error anywhere and `--status` still reporting everything installed.

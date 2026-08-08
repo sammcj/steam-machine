@@ -368,7 +368,11 @@ do_boot() {
 do_status() {
     local kver efi
     kver="$(cached_kver)" || true
-    efi="$(efi_dir 2>/dev/null || echo '?')"
+    # `|| echo '?'` inside the substitution never fires: efi_dir ends in die,
+    # which exits the subshell outright, so the `||` is never reached and the
+    # assignment fails under `set -e`. The ESP is 0700 root, so that killed the
+    # whole of --status for an unprivileged run -- no output, exit 1.
+    efi="$(efi_dir 2>/dev/null)" || efi='?'
 
     echo "cached kernel      : ${kver:-<none>}"
     echo "cache tarball      : $( [[ -f "$CACHE_DIR/kernel.tar.zst" ]] \
@@ -380,9 +384,12 @@ do_status() {
     echo "mkinitcpio preset  : $( [[ -f $PRESET_DEST ]] && echo yes || echo NO)"
     # Checks the UUID too, not just existence: a custom.cfg left over from the
     # other A/B slot points `search --fs-uuid` at a filesystem that is not there.
-    echo "grub custom.cfg    : $( custom_cfg_installed "$efi/custom.cfg" 2>/dev/null \
+    # With no readable ESP there is nothing to judge; saying NO would be a lie
+    # that reads as "the boot entry is gone".
+    echo "grub custom.cfg    : $( [[ $efi == '?' ]] && echo '? -- ESP is 0700 root (run as root)' \
+        || { custom_cfg_installed "$efi/custom.cfg" 2>/dev/null \
         && echo "yes ($efi/custom.cfg)" \
-        || { [[ -f "$efi/custom.cfg" ]] && echo 'STALE -- wrong UUID or no kernel line' || echo NO; })"
+        || { [[ -f "$efi/custom.cfg" ]] && echo 'STALE -- wrong UUID or no kernel line' || echo NO; }; })"
     echo "boot service       : $(systemctl is-enabled steam-machine-kernel.service 2>/dev/null || echo NO)"
     # Has anything been installed into the module tree since the cache was
     # built? If so it is NOT protected: a SteamOS update restores the tarball
