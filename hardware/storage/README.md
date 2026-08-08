@@ -6,41 +6,6 @@ and usable as a second Steam library.
 **Status: mounted and surviving remount**, with one manual step remaining — see
 [Registering with Steam](#registering-with-steam).
 
-## Was masked for the power-off hang (2026-08-07, restored 2026-08-08)
-
-Cleared, and the array was never the cause — the machine hung with it unmounted
-and masked. The real causes were `mt7921e` binding the onboard MT7902 Wi-Fi and
-the Gamescope session holding the GPU at shutdown; see
-[hardware/kernel/](../kernel/README.md#solved-power-off-hangs-2026-08-06-to-2026-08-08).
-
-The evidence was against it from the start: it had been in `/etc/fstab` since
-2026-08-03, so it was mounted during successful power-offs as well as during the
-hangs; it holds 160 KiB, so there was nothing to flush; and every hang logged a
-clean unmount before wedging. It was masked anyway because the test cost
-nothing.
-
-If it ever needs masking again:
-
-```bash
-sudo systemctl mask home-deck-SATA.mount     # /etc/systemd/system/home-deck-SATA.mount -> /dev/null
-sudo umount /home/deck/SATA
-```
-
-and to restore:
-
-```bash
-sudo systemctl unmask home-deck-SATA.mount
-sudo systemctl daemon-reload
-sudo mount /home/deck/SATA
-```
-
-Masking rather than editing `/etc/fstab` is the right lever and worth
-remembering: `install.sh --boot` re-adds the fstab entry every boot, so a
-commented-out line would come back. The mask outranks the generator and needs no
-change to this subsystem. It also persists correctly —
-`/etc/systemd/system/*.mount` is on the SteamOS keep list, so a mask survives an
-A/B update as well as a reboot.
-
 > **Move completed (2026-08-02).** The mount point moved from `/home/deck/Games`
 > to `/home/deck/SATA`. The subvolume (`@games` → `@SATA`) and the filesystem
 > label (`games` → `SATA`) were renamed to match, so nothing about this array

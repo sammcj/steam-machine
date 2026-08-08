@@ -20,6 +20,7 @@
 Things I haven't got around to investigating or doing yet
 Priorities below are (H)igh, (M)edium, (L)ow.
 
+- **Turn SMT back on in the BIOS (M)** - the 9800X3D is 8C/16T and is currently running 8C/**8T**. `Thread(s) per core: 1`, `/sys/devices/system/cpu/smt/control` = `notsupported`, `thread_siblings_list` = `0`, and there is no `nosmt` on the kernel command line, so it is off at firmware level rather than anything software-side. Gigabyte's default is Auto (enabled), so this was either changed deliberately or reset. **Advanced → AMD CBS → SMT Control → Auto**. Costs roughly 25-40% on compile-bound work; near-neutral for gaming. See [Platform notes](#smt-is-off-in-the-bios).
 - Configuration backup (M)
 - Emulation setup (setup retrodeck, restore rooms and metadata from SteamDeck) (L)
 - Overclocking GPU (L) - the _controls_ are now available and persistent (LACT overdrive, see [hardware/gpu/](hardware/gpu/README.md)); no clocks, limits or fan curves have actually been set yet.
@@ -40,7 +41,7 @@ Priorities below are (H)igh, (M)edium, (L)ow.
 - **Hardware sensors** - full coverage for thermal logging: fan RPM / Vcore / VRM temp from the ITE IT8696E (out-of-tree `it87`), SATA SSD temps (`drivetemp`), and the FCH SMBus unblocked so DDR5 DIMM temps work. All labels verified by correlation under load, not guessed. See [hardware/sensors/](hardware/sensors/README.md). DIMM temps confirmed reading after the reboot.
 - **Secondary game library (BTRFS RAID1)** - the two Crucial MX500s mirrored and mounted at `/home/deck/SATA` via fstab, with `compress=zstd:1`, `discard=async`, `noatime`, monthly scrub and weekly trim. SteamOS's own automount refuses anything that isn't ext4, so this goes around it. See [hardware/storage/](hardware/storage/README.md). **One manual step left:** register it as a Steam library with Steam closed.
 - **CoolerControl** - daemon + embedded web UI on port **11987** for watching temps, fans and power over time, reading the hwmon coverage above. Reachable from the LAN, not just localhost. It never touches the fan curves (`apply_on_boot = false`, so they stay with the BIOS), but the API itself is read/write behind a single password - CoolerControl has no read-only mode. **Off by default**: it is a LAN-exposed root daemon polling hwmon continuously, so it is turned on per measurement session with the `coolercontrol on` / `coolercontrol off` shell function ("on" persists across reboots, so you can enable it and reboot into gaming mode). See [hardware/coolercontrol/](hardware/coolercontrol/README.md).
-- **4K 120Hz over the native HDMI port** - working (2026-08-06) on a hand-built mainline **Linux 7.2-rc6** with HDMI 2.1 FRL enabled (`amdgpu.dcfeaturemask=0x402`). **3840×2160 @ 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10, `underflow 0`, single pipe** - measured at a 1188.00 MHz pixel clock, 1.98× the 600 MHz HDMI 2.0 TMDS ceiling. Strictly better than the converter it replaces (10 bpc *with* DSC, plus glitching), and the adapter is out of the chain. Verified rather than assumed that no Valve kernel can do this: `amdgpu.ko` extracted from 6.16.12, 6.18.33 and 6.18.38 all have a byte-identical FRL symbol set, and none contain the native `dcn401_hpo_frl_stream_encoder`. See [hardware/kernel/](hardware/kernel/README.md), with the raw capture in [`frl-4k120-evidence.txt`](hardware/kernel/frl-4k120-evidence.txt). It is now the **default boot entry** and **survives SteamOS updates**: a keep-listed systemd unit restores it from a cached tarball on `/home` after an image swap, at a cost of one boot on the stock kernel. `grub.cfg` stays byte-for-byte stock, so a failure anywhere in this falls through to Valve's kernel. **VRR works too** (2026-08-06): 40-120 Hz, `vrr_capable 1`, via AMD's unmerged 4-patch series hand-ported onto the build - see [hardware/kernel/patches/](hardware/kernel/patches/). CEC still does not work and is not fixable in software: amdgpu registers no CEC adapter for its own HDMI ports on any kernel.
+- **4K 120Hz over the native HDMI port** - working (2026-08-06) on a hand-built mainline **Linux 7.2-rc6** with HDMI 2.1 FRL enabled (`amdgpu.dcfeaturemask=0x402`). **3840×2160 @ 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10, `underflow 0`, single pipe** - measured at a 1188.00 MHz pixel clock, 1.98× the 600 MHz HDMI 2.0 TMDS ceiling. Strictly better than the converter it replaces (10 bpc *with* DSC, plus glitching), and the adapter is out of the chain. Verified rather than assumed that no Valve kernel can do this: `amdgpu.ko` extracted from 6.16.12, 6.18.33 and 6.18.38 all have a byte-identical FRL symbol set, and none contain the native `dcn401_hpo_frl_stream_encoder`. See [hardware/kernel/](hardware/kernel/README.md), with the raw capture in [`frl-4k120-evidence.txt`](hardware/kernel/frl-4k120-evidence.txt). It is now the **default boot entry** and **survives SteamOS updates**: a keep-listed systemd unit restores it from a cached tarball on `/home` after an image swap, at a cost of one boot on the stock kernel. `grub.cfg` stays byte-for-byte stock, so a failure anywhere in this falls through to Valve's kernel. **VRR works too** (2026-08-06): 40-120 Hz, `vrr_capable 1`, via AMD's unmerged 4-patch series hand-ported onto the build - see [hardware/kernel/patches/](hardware/kernel/patches/). CEC does not work: amdgpu registers no CEC adapter for its own HDMI ports on any kernel. **Power-off hangs are fixed** (2026-08-08) - they needed two changes, an `mt7921e` blacklist and a shutdown-time VT switch.
 - **4K 120Hz via a DP converter** - *superseded by the above, kept because it still works and is the fallback.* Working 2026-08-02 via a **UGREEN 80397** active DP 1.4 → HDMI 2.1 converter on `DP-1`, immediately on hotplug with no configuration. 4:4:4 10-bit with HDR, DSC active, `underflow 0`. See [hardware/display/](hardware/display/README.md). VRR does not work through this converter and is not being chased - see below.
 - **"No signal" when the TV is switched on after the machine** - the converter is the DP sink, not the TV: it holds HPD asserted and answers EDID from cache whether the TV is on or off, so a modeset landing while the TV is off strands it forever, with every driver-side reading claiming a healthy 4K120 link. Nothing on this side can detect the TV's power state - DPCD, DDC, DDC/CI and the audio ELD were all sampled across a power cycle and are bit-identical, so a polling daemon has nothing to poll. Fixed by forcing a replug through debugfs `trigger_hotplug`, wired to four triggers: **Shift+Esc**, controller connect, boot and resume. See [hardware/display/](hardware/display/README.md).
 - **GPU overdrive (LACT) made persistent** - LACT's "enable overclocking" writes `/etc/modprobe.d/99-amdgpu-overdrive.conf`, which is *not* on the SteamOS keep list, so every A/B update silently deletes it and every LACT control goes back to greyed-out. Confirmed by recovering the file from the `/etc` snapshot the 1 Aug update took just before discarding it. Now allowlisted, with a boot self-heal. See [hardware/gpu/](hardware/gpu/README.md). Confirmed active after the reboot: `--status` reports the overdrive bit set.
@@ -75,7 +76,7 @@ That suggests an untested route worth the five minutes: put a CEC-tunnelling DP�
 
 ##### Onboard WiFi (L)
 - Bluetooth is **now working** - see [hardware/bluetooth/](hardware/bluetooth/README.md) and the [platform note below](#onboard-wireless-mediatek-mt7902).
-- WiFi is still unsupported on kernel 6.16 and not worth chasing while 2.5G wired works. The same upstream repo has a `backport` branch that builds `mt7902e.ko` for the PCIe side if it ever matters.
+- WiFi is unsupported and now deliberately blacklisted - mainline 7.2 binds the device but its firmware does not exist, and the driver's remove path then hangs power-off. Not worth chasing while 2.5G wired works.
 
 #### Controller wake from sleep (H)
 - Wake from bluetooth controller not working (Playstation 5 DualSense)
@@ -181,6 +182,22 @@ SteamOS 3.x boots a read-only btrfs root from an A/B pair. An update writes a wh
 - Anything installed with pacman needs an idempotent install script that gets re-run after every OS update.
 - `/usr/lib/systemd/system-sleep/` is unusable here (read-only rootfs). For resume hooks use a systemd unit in `/etc/systemd/system` with `After=sleep.target` and `WantedBy=sleep.target`. `sleep.target` covers suspend, hibernate, hybrid-sleep and suspend-then-hibernate; `suspend.target` only covers plain suspend.
 
+### SMT is off in the BIOS
+
+Measured 2026-08-08 during a kernel build, and worth knowing before trusting any benchmark taken on this machine:
+
+```
+Model name:          AMD Ryzen 7 9800X3D 8-Core Processor
+Thread(s) per core:  1                 <- 2 expected
+CPU(s):              8                 <- 16 expected
+smt/control          notsupported      <- firmware, not a kernel setting
+thread_siblings_list 0                 <- core 0 has no sibling
+```
+
+`notsupported` means the kernel never enumerated a second thread per core, and `/proc/cmdline` carries no `nosmt` or `maxcpus`, so this is the firmware and not something fixable from the OS.
+
+The effect is workload-shaped: a kernel `make modules` is entirely `cc1`, which is branchy and cache-missy and therefore exactly what SMT fills stalls for - expect 25-40% back. Games are near-neutral, sometimes marginally better with it on. Nothing here is broken by it; it just quietly halves throughput on anything that scales with threads, and any CPU benchmark in these notes taken before it is fixed is measuring 8 threads, not 16.
+
 ### SMBus and I2C on AM5
 
 - **The SMBus is blocked by ACPI out of the box, and this is the reason a tool "doesn't detect" RAM on this board.** The firmware declares an OperationRegion (`\GSA1.SMBI`) over `0x0B00-0x0B0F`, and the kernel default `acpi_enforce_resources=strict` makes `i2c-piix4` back off rather than share it: the module loads and registers **zero** adapters. Boot with `acpi_enforce_resources=lax` to get them. Installed by [hardware/sensors/](hardware/sensors/README.md); it is a boot parameter only, not settable at runtime.
@@ -216,7 +233,7 @@ Status as of August 2026:
 
 - FRL **merged for Linux 7.2**, in rc now, stable expected late August 2026. It is **off by default** because VRR-over-FRL did not land with it. DSC-over-FRL *did* merge.
 - The enabling parameter is widely misquoted online as `amdgpu.dc_feature_mask=0x400`. **Both parts are wrong**: it is spelled `dcfeaturemask`, and it *replaces* the mask rather than OR-ing into it - on this machine the live value is `2`, so it would need `0x402`.
-- Valve has backported the ALLM/HDMI-VRR half (`allm_mode`, `hdmi_vrr_desktop_mode` both exist here) but **not** FRL. SteamOS 3.8 is on 6.16.
+- Valve has backported the ALLM/HDMI-VRR half (`allm_mode`, `hdmi_vrr_desktop_mode` both exist here) but **not** FRL. SteamOS 3.8 is on 6.18.42.
 - The out-of-tree work preceding the merge was tested on DCN 4.0.1 - Navi 48, this exact GPU. RDNA4 is the best-tested path.
 
 Until SteamOS rebases onto 7.2+:
@@ -232,13 +249,11 @@ This board uses a **MediaTek MT7902** (Filogic 310, Wi-Fi 6E + BT 5.3), not the 
 
 - WiFi is the PCIe function: `lspci -nn | grep -i net` → `08:00.0 Network controller [14c3:7902]`.
 - Bluetooth is a **separate USB device** on MediaTek's own vendor ID: `lsusb` → `Bus 001 Device 005: ID 0e8d:7902 MediaTek Inc. Wireless_Device`.
-  (An earlier revision of these notes listed the BT device as `13d3:3579` - that was from secondary sources and is wrong for this board.)
 
 Why neither worked out of the box (**Bluetooth is now fixed** - see
-[hardware/bluetooth/](hardware/bluetooth/README.md); WiFi is still unsupported):
+[hardware/bluetooth/](hardware/bluetooth/README.md); WiFi is unsupported and blacklisted):
 
-- Mainline MT7902 support only landed in **kernel 7.1** (MediaTek's patch series posted to linux-wireless 2026-02-19). **SteamOS 3.8 ships kernel 6.16** (`6.16.12-...-neptune-616`), so there is no in-tree driver for either function today.
-- **WiFi - nothing binds at all.** No module in 6.16 advertises the PCI ID; `modprobe -c | grep 14C3` lists `0608`/`0616` → `mt7921e` and `0717` → `mt7925e`, but no `7902`. `/sys/bus/pci/devices/0000:08:00.0/driver` does not exist and `lspci -vv` shows the BARs still `[disabled]` - the device has never been powered up.
+- **WiFi - unusable, and on mainline 7.2 actively harmful.** No Valve kernel binds it: 6.18.42's `mt7921e` advertises `7920`/`7922`/`7961` and no `7902`, so the device sits unpowered with its BARs `[disabled]`. Mainline 7.2 *does* bind it (`c26319afb5fb`), which is worse - MediaTek have never published MT7902 Wi-Fi firmware, so probe fails, the device stays bound anyway, and `mt7921_pci_remove()` (which is also `.shutdown`) then hangs every power-off in `napi_disable_locked`. `mt7921e` is blacklisted here; see [hardware/kernel/](hardware/kernel/README.md).
 - **Bluetooth - `btusb` binds, then bails.** All three interfaces of `1-10` are bound to `btusb` and `hci1` is created, but setup aborts with:
 
   ```

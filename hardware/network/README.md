@@ -24,7 +24,7 @@ on every boot. That is what this subsystem does.
 
 ## The hardware
 
-`RTL8125D` (XID 688) on in-tree `r8169`, kernel 6.16. In-tree support is
+`RTL8125D` (XID 688) on in-tree `r8169`, kernel 6.18.42. In-tree support is
 genuine — `rtl_is_8125()` is true for this chip, so it takes the 8125-specific
 magic-packet path (`r8168_mac_ocp_modify(tp, 0xc0b6, 0, BIT(0))`) and the
 `PME_SIGNAL` path. **Realtek's out-of-tree `r8125-dkms` is not needed**, and on

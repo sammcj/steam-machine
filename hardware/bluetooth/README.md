@@ -1,7 +1,7 @@
 # Onboard MediaTek MT7902 Bluetooth
 
 Gets the motherboard's built-in Bluetooth radio working on SteamOS 3.8
-(kernel 6.16), which has no driver for it.
+(kernel 6.18.42), which has no driver for it.
 
 **Status: working.** `hci0` = onboard MT7902 with a real BD_ADDR (`hciconfig hci0` prints it), and BlueZ uses it as the default controller.
 
@@ -15,7 +15,7 @@ It presents as two independent devices:
 | Bluetooth | USB `0e8d:7902`       | **fixed here**            |
 | Wi-Fi     | PCIe `14c3:7902`      | still unsupported         |
 
-Mainline support for both landed in **kernel 7.1**; SteamOS 3.8 is on 6.16.
+Mainline support for both landed in **kernel 7.1**; SteamOS 3.8 is on 6.18.42, which still has neither.
 
 On a stock system the in-tree `btusb` matches the USB device via its generic
 Bluetooth-class entry, hands it to `btmtk`, and `btmtk` rejects it:
@@ -25,7 +25,7 @@ Bluetooth: hci1: Unsupported hardware variant (00007902)
 ```
 
 `hci1` is then left permanently `DOWN` with BD address `00:00:00:00:00:00`.
-`btmtk` in 6.16 only knows MT7922 / MT7961 / MT7925, and `linux-firmware` ships
+`btmtk` in 6.18.42 still only knows MT7922 / MT7961 / MT7925, and `linux-firmware` ships
 no `BT_RAM_CODE_MT7902_*` blob.
 
 ## The fix

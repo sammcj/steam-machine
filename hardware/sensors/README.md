@@ -1,6 +1,6 @@
 # Hardware sensors
 
-Full temperature, fan and voltage coverage on SteamOS 3.8 (kernel 6.16), for
+Full temperature, fan and voltage coverage on SteamOS 3.8 (kernel 6.18.42), for
 thermal logging while gaming.
 
 **Status: working**, with one item pending a reboot (DDR5 DIMM temps — see
