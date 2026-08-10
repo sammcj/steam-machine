@@ -33,6 +33,19 @@
 # entry and the --boot self-heal.
 set -euo pipefail
 
+# Shared self-elevation (lib/elevate.sh): provides elevate() and need_root().
+# Walks up to the repo root so this works at any directory depth.
+_lib() {
+    local d; d=$(readlink -f "${BASH_SOURCE[0]}"); d=${d%/*}
+    while [[ $d != / ]]; do
+        [[ -r $d/lib/elevate.sh ]] && { printf '%s\n' "$d/lib/elevate.sh"; return 0; }
+        d=${d%/*}
+    done
+    return 1
+}
+_l=$(_lib) && source "$_l"
+
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 VERSION="4.3.1"
@@ -56,8 +69,7 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
-need_root() { [[ $EUID -eq 0 ]] || die "must run as root (SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A $0)"; }
-
+# need_root() now comes from lib/elevate.sh -- it elevates before dying.
 # --- fetch --------------------------------------------------------------------
 # Pinned by version *and* sha256. The binary is 37 MB, so it is cached under
 # /home rather than committed; the checksum is what makes that reproducible.

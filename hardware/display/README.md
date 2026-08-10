@@ -14,6 +14,14 @@ Everything below this line is the converter-era record. It is kept because it
 holds measurements that are still true about *that* hardware, and because the
 converter remains the fallback if the FRL kernel ever has to be rolled back.
 
+**For the side-by-side comparison of all three paths — native FRL, the UGREEN
+80397 and the ULT-W11Q — see [`4k120-paths.md`](4k120-paths.md).** It also
+records the finding that both converters are the same Chrontel CH7218
+(`branch_dev_id` `0x2B02F0`), so the VRR results below apply to both. Note that
+`freesync_pcon_allow_all`, used in the tests below, exists only on the Valve
+kernel: it is absent from mainline 7.2-rc6, so that bypass cannot be repeated on
+the kernel this machine now runs.
+
 ### Converter-era status (historical)
 
 **4K120 was working**, over an active DP 1.4 → HDMI 2.1 converter on `DP-1`.

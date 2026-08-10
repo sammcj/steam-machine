@@ -63,7 +63,9 @@ Priorities below are (H)igh, (M)edium, (L)ow.
 
 4K120 is done; VRR is not, and **is not worth chasing on this adapter**. Tested and reverted 2026-08-02.
 
-`amdgpu` whitelists DP-to-HDMI converters by branch device ID. `freesync_pcon_allow_all=1` bypasses that, and the bypass worked - the UGREEN identified as `branch_dev_id : 2818800` (`0x2B02F0`). But VRR stayed `incapable` / `vrr_range 0-0` anyway: the converter doesn't pass FreeSync through to the TV, so the whitelist was never the constraint.
+`amdgpu` whitelists DP-to-HDMI converters by branch device ID. `freesync_pcon_allow_all=1` bypasses that, and the bypass worked - the UGREEN identified as `branch_dev_id : 2818800` (`0x2B02F0`). But VRR stayed `incapable` / `vrr_range 0-0` anyway.
+
+Re-measured 2026-08-10 on a second converter that turned out to be the **same Chrontel CH7218** (`0x2B02F0` again): `amdgpu` needs three conditions, and the converter meets two of them - `ADAPTIVE_SYNC_SDP_SUPPORT` (DPCD 0x2214 bit 0) and `allow_invalid_MSA_timing_param` (DPCD 0x007 bit 6) are both set. **The whitelist is the only unmet condition**, so a one-line kernel patch is a real if unproven shot, against the counter-evidence that bypassing it on Valve 6.16 delivered nothing. `freesync_pcon_allow_all` does not exist on mainline 7.2-rc6, so a source patch is the only route. See [`hardware/display/4k120-paths.md`](hardware/display/4k120-paths.md).
 
 A vertical seam also appeared at 4K120 in that session. Neither the parameter nor ODM combine causes it: ODM 2:1 is active regardless (it's the only way 1188 MHz runs on the converter path) and the seam went away with ODM still on. Cause unresolved, not recurring; the session's X11-vs-Wayland state was never recorded, which is the likely confound. Detail in [hardware/display/](hardware/display/README.md).
 
@@ -79,7 +81,9 @@ Does not work **on the native HDMI port**, and moving to it did not fix it. Veri
 
 **Reports of "CEC works on my 9070 XT" are the DisplayPort tunnel, not the HDMI port.** [Twsts/steamos-cec-toolkit](https://github.com/Twsts/steamos-cec-toolkit) - a SteamOS CEC toolkit worth knowing about - is built and tested on exactly that card with **a UGREEN DP→HDMI CEC adapter** providing `/dev/cec0`. It was installed here on 2026-08-07 and **removed on 2026-08-08** — with no `/dev/cec0` it could do nothing, and it had put a script in `/etc/systemd/system-sleep/` that ran on every suspend and resume. Worth revisiting only if a CEC-tunnelling DP→HDMI adapter is ever added.
 
-That suggests an untested route worth the five minutes: put a CEC-tunnelling DP→HDMI adapter on a **spare DisplayPort output and an unused TV input**, leaving 4K120 FRL on the native HDMI port. CEC is a bus, so control should work whichever input the TV is showing. Otherwise a USB CEC adapter (Pulse-Eight, ~$60 AUD) is the option that definitely works. See [hardware/kernel/](hardware/kernel/README.md).
+**Confirmed working over the DP tunnel, 2026-08-10.** With a CH7218 converter on `DP-1`, `/dev/cec0` appears by itself: CEC 2.0, physical address `2.0.0.0`, and the C9 answers with vendor `0x00e091` and power status. SteamOS's own `cecd` needs no help - `rc0` (`rc-cec`) and `cecd DP-1` input devices are created at boot, so the TV remote reaches the machine.
+
+That leaves the route this section already proposed, now half-proven: put the converter on a **spare DisplayPort output and an unused TV input** purely as a CEC endpoint, leaving 4K120 FRL on the native HDMI port. The tunnel does not require the output to display anything; gamescope would need pinning to HDMI. Still untested in that configuration. Otherwise a USB CEC adapter (Pulse-Eight, ~$60 AUD) also works. See [`hardware/display/4k120-paths.md`](hardware/display/4k120-paths.md).
 
 ##### Onboard WiFi (L)
 - Bluetooth is **now working** - see [hardware/bluetooth/](hardware/bluetooth/README.md) and the [platform note below](#onboard-wireless-mediatek-mt7902).

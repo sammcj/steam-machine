@@ -22,6 +22,19 @@
 # lives in this repo under /home.
 set -euo pipefail
 
+# Shared self-elevation (lib/elevate.sh): provides elevate() and need_root().
+# Walks up to the repo root so this works at any directory depth.
+_lib() {
+    local d; d=$(readlink -f "${BASH_SOURCE[0]}"); d=${d%/*}
+    while [[ $d != / ]]; do
+        [[ -r $d/lib/elevate.sh ]] && { printf '%s\n' "$d/lib/elevate.sh"; return 0; }
+        d=${d%/*}
+    done
+    return 1
+}
+_l=$(_lib) && source "$_l"
+
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 UDEV_SRC="$REPO_DIR/udev.rules.d/60-steam-machine-rgb.rules"
@@ -47,8 +60,7 @@ log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
-need_root() { [[ $EUID -eq 0 ]] || die "must run as root (SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A $0 $*)"; }
-
+# need_root() now comes from lib/elevate.sh -- it elevates before dying.
 # --- udev rule ----------------------------------------------------------------
 # With --no-i2c, install the rule minus its SMBus stanza -- everything from the
 # @I2C-STANZA-BEGIN marker down.
