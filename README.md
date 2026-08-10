@@ -56,6 +56,20 @@ Priorities below are (H)igh, (M)edium, (L)ow.
 - **sshd policy pinned, and keepalives enabled** - `/etc/ssh/sshd_config.d/10-steam-machine.conf` was tracked nowhere and pinned by nothing; the keep list covers `/etc/ssh/*_key` and nothing else, so `AllowUsers deck` and `PermitRootLogin no` would have silently reverted to stock Arch defaults on the next A/B update - a quiet loosening of access policy with no symptom at all. Now in the repo, allowlisted, with a boot self-heal that validates via `sshd -t` and rolls back rather than risking a lockout. Also sets `ClientAliveInterval 60` / `ClientAliveCountMax 5`: with keepalives off (the default) a dropped client leaves its session registered with logind for up to ~2 h 11 m of TCP timeout, which would pin the machine awake through the inhibitor above. The two are a pair. See [system/ssh/](system/ssh/README.md).
 - **Idle power** - `powertop` was run because the CPU appeared pinned at 4 GHz+ at idle. It is not: `scaling_cur_freq` and `/proc/cpuinfo` both derive from APERF/MPERF, which on AMD only tick in C0, so they report the clock during the awake slices and are blind to halted time. Measured residency is 93% idle (77% in C3), and `amd-pstate-epp` is already doing the right thing by racing to clock and dropping back into CC6. Of powertop's ~45 suggestions three survived triage: `kernel.nmi_watchdog=0`, `vm.dirty_writeback_centisecs=1500`, and SATA `med_power_with_dipm` on the two MX500s. Its 41 "Bad" runtime-PM entries reduce to about four decisions - ~20 are PCI devices with no driver bound, so `auto` has nothing to invoke; five are the single fact that one xHCI controller cannot suspend while the controllers and headset plugged into it are pinned on; one is a powertop bug (it string-compares `snd_hda` `power_save` against "1" when the value is "10" and all three codecs are already suspended). Every rejection is recorded with its evidence so the next powertop run doesn't re-derive them. See [system/power/](system/power/README.md).
 - **Shell setup in the repo** - the aliases and `PATH`/env exports that were only ever in `~/.bashrc`: `g`/`p`/`P`/`gitwip`, the `cc`/`ccd`/`cccd`/`ccrd` Claude Code aliases, `vi`, and the Homebrew / `~/.local/bin` / `.NET SDK` `PATH` setup. Sourced from the repo rather than copied, so the version under git is the one actually in use. `trigger_detect_tv` was the one machine-specific alias and was stale - it wrote to a hardcoded `dri/0/DP-1` path; it now calls `display-redetect`, the same script the four automatic triggers run. The subsystem-specific shell functions (`keepawake`, `wayland`, `coolercontrol`) stay with their own hardware. See [system/shell/](system/shell/README.md).
+- Disabled RGB Lighting. RBG is pretty tacky and certainly distracting in a living room environment.
+  - Disabled Kingston RAM RGB LEDs
+- **Now detected.** Support was never the problem: it merged in [MR !2435](https://gitlab.com/CalcProgrammer1/OpenRGB/-/merge_requests/2435) on 2024-07-23. The cause was local.
+- **Root cause found (2026-08-02):** it was never a wrong-port problem - there were **no `i2c-piix4` ports at all**. The firmware declares an ACPI OperationRegion over the SMBus I/O range, and `acpi_enforce_resources=strict` (the kernel default) made `i2c-piix4` register zero adapters. Fixed with `acpi_enforce_resources=lax` while setting up sensors; see [hardware/sensors/](hardware/sensors/README.md#the-fch-smbus-is-blocked-by-acpi). Confirmed after the reboot: OpenRGB detects the RAM on `i2c-2` and it is blanked via Static mode. See [hardware/rgb/](hardware/rgb/README.md).
+- Also worried about bricking the RAM with OpenRGB as per [this post](https://github.com/ubihazard/ddr5-spd-recovery). An SPD baseline is now committed at `hardware/sensors/baseline/`, with `hardware/sensors/bin/spd-check.sh` to diff against it.
+- A bespoke SMBus writer was designed and abandoned - see `git log -- hardware/ram/`. It was premised on a wrong-i2c-port theory and on never installing OpenRGB; the real blocker was the ACPI SMBus conflict, and OpenRGB is what actually blanks the DIMMs. Handled by [hardware/rgb/](hardware/rgb/README.md).
+
+##### XFX Radeon RX 9070 XT OC Gaming Edition
+- **The card has no RGB controller - OpenRGB can never detect it as a GPU.** All six I²C buses belonging to `0000:03:00.0` (`AMDGPU SMU 0/1`, `AMDGPU DM i2c hw bus 0-3`) are empty, and nothing on USB/hidraw belongs to the card. Cards OpenRGB does support (Sapphire Nitro+, ASUS TUF, Gigabyte AORUS, PowerColor Red Devil - all already compiled into the installed 1.0rc3) have a real microcontroller on one of those buses; this one does not. Upstream request [#5154](https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/5154) is for this exact card (subsystem `1EAE:8811`) and its "device captures" section is blank, because there is nothing to capture.
+- The shroud strip is a **dumb 5V ARGB slave with an input connector**, not an addressable device. XFX's own wording: *"a full-length 5-volt ARGB element across the shroud"* plus a supplied **sync cable**. Unconnected it runs a hardcoded rainbow from a small onboard driver, which is what makes it look software-reachable.
+- **The fix is to plug the XFX sync cable into one of the board's three ARGB_V2 headers**, at which point the strip becomes a zone of the `B850M FORCE WIFI6E V2` (ITE IT5711) controller OpenRGB already detects. Handled by [hardware/rgb/](hardware/rgb/README.md), which sizes and blanks all three headers so it doesn't matter which one is used. **Done.**
+- Set via OpenRGB's **Static** mode, not Direct - Static is committed to the IT5711 and survives OpenRGB exiting and a power cycle, so the systemd units are a safety net rather than the mechanism.
+
+
 
 ### Not working (yet)
 
@@ -91,22 +105,7 @@ That leaves the route this section already proposed, now half-proven: put the co
 
 #### Controller wake from sleep (H)
 - Wake from bluetooth controller not working (Playstation 5 DualSense)
-- There is an upstream report that the 2026 Steam Controller and its puck also fail to wake from suspend ([bazzite#4873](https://github.com/ublue-os/bazzite/issues/4873)) - **not tested here**, noted only because it touches the same item.
-
-#### Disabling RGB Lighting (M)
-RBG is pretty tacky and certainly distracting in a living room environment.
-
-##### Kingston RGB RAM
-- **Now detected.** Support was never the problem: it merged in [MR !2435](https://gitlab.com/CalcProgrammer1/OpenRGB/-/merge_requests/2435) on 2024-07-23. The cause was local.
-- **Root cause found (2026-08-02):** it was never a wrong-port problem - there were **no `i2c-piix4` ports at all**. The firmware declares an ACPI OperationRegion over the SMBus I/O range, and `acpi_enforce_resources=strict` (the kernel default) made `i2c-piix4` register zero adapters. Fixed with `acpi_enforce_resources=lax` while setting up sensors; see [hardware/sensors/](hardware/sensors/README.md#the-fch-smbus-is-blocked-by-acpi). Confirmed after the reboot: OpenRGB detects the RAM on `i2c-2` and it is blanked via Static mode. See [hardware/rgb/](hardware/rgb/README.md).
-- Also worried about bricking the RAM with OpenRGB as per [this post](https://github.com/ubihazard/ddr5-spd-recovery). An SPD baseline is now committed at `hardware/sensors/baseline/`, with `hardware/sensors/bin/spd-check.sh` to diff against it.
-- A bespoke SMBus writer was designed and abandoned - see `git log -- hardware/ram/`. It was premised on a wrong-i2c-port theory and on never installing OpenRGB; the real blocker was the ACPI SMBus conflict, and OpenRGB is what actually blanks the DIMMs. Handled by [hardware/rgb/](hardware/rgb/README.md).
-
-##### XFX Radeon RX 9070 XT OC Gaming Edition
-- **The card has no RGB controller - OpenRGB can never detect it as a GPU.** All six I²C buses belonging to `0000:03:00.0` (`AMDGPU SMU 0/1`, `AMDGPU DM i2c hw bus 0-3`) are empty, and nothing on USB/hidraw belongs to the card. Cards OpenRGB does support (Sapphire Nitro+, ASUS TUF, Gigabyte AORUS, PowerColor Red Devil - all already compiled into the installed 1.0rc3) have a real microcontroller on one of those buses; this one does not. Upstream request [#5154](https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/5154) is for this exact card (subsystem `1EAE:8811`) and its "device captures" section is blank, because there is nothing to capture.
-- The shroud strip is a **dumb 5V ARGB slave with an input connector**, not an addressable device. XFX's own wording: *"a full-length 5-volt ARGB element across the shroud"* plus a supplied **sync cable**. Unconnected it runs a hardcoded rainbow from a small onboard driver, which is what makes it look software-reachable.
-- **The fix is to plug the XFX sync cable into one of the board's three ARGB_V2 headers**, at which point the strip becomes a zone of the `B850M FORCE WIFI6E V2` (ITE IT5711) controller OpenRGB already detects. Handled by [hardware/rgb/](hardware/rgb/README.md), which sizes and blanks all three headers so it doesn't matter which one is used. **Pending: cable not yet connected.**
-- Set via OpenRGB's **Static** mode, not Direct - Static is committed to the IT5711 and survives OpenRGB exiting and a power cycle, so the systemd units are a safety net rather than the mechanism.
+- There is an upstream report that the 2026 Steam Controller and its puck also fail to wake from suspend ([bazzite#4873](https://github.com/ublue-os/bazzite/issues/4873)) - **not tested here**, noted only because it touches the same 
 
 ##### OpenRGB access rules
 - The `/usr/lib/udev/rules.d/60-openrgb.rules` on this machine is **owned by no package** (`pacman -Qo` confirms) and was dropped in by hand. `/usr` is replaced wholesale by every A/B update, so it will vanish. It also grants uaccess to *every* i2c bus - including the FCH SMBus with the always-host-writable DDR5 SPD EEPROMs, the exact hazard the section above is paranoid about. Replaced by a narrow two-stanza rule in `/etc` by [hardware/rgb/](hardware/rgb/README.md).
@@ -192,22 +191,6 @@ SteamOS 3.x boots a read-only btrfs root from an A/B pair. An update writes a wh
 - Prefer solutions with no package dependencies. Python 3 is in the base image. `i2c-tools` is not.
 - Anything installed with pacman needs an idempotent install script that gets re-run after every OS update.
 - `/usr/lib/systemd/system-sleep/` is unusable here (read-only rootfs). For resume hooks use a systemd unit in `/etc/systemd/system` with `After=sleep.target` and `WantedBy=sleep.target`. `sleep.target` covers suspend, hibernate, hybrid-sleep and suspend-then-hibernate; `suspend.target` only covers plain suspend.
-
-### SMT is off in the BIOS
-
-Measured 2026-08-08 during a kernel build, and worth knowing before trusting any benchmark taken on this machine:
-
-```
-Model name:          AMD Ryzen 7 9800X3D 8-Core Processor
-Thread(s) per core:  1                 <- 2 expected
-CPU(s):              8                 <- 16 expected
-smt/control          notsupported      <- firmware, not a kernel setting
-thread_siblings_list 0                 <- core 0 has no sibling
-```
-
-`notsupported` means the kernel never enumerated a second thread per core, and `/proc/cmdline` carries no `nosmt` or `maxcpus`, so this is the firmware and not something fixable from the OS.
-
-The effect is workload-shaped: a kernel `make modules` is entirely `cc1`, which is branchy and cache-missy and therefore exactly what SMT fills stalls for - expect 25-40% back. Games are near-neutral, sometimes marginally better with it on. Nothing here is broken by it; it just quietly halves throughput on anything that scales with threads, and any CPU benchmark in these notes taken before it is fixed is measuring 8 threads, not 16.
 
 ### SMBus and I2C on AM5
 
