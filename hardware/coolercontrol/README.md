@@ -43,7 +43,7 @@ a root-executed binary should not be user-writable.
 ### `/etc/coolercontrol` needs an explicit keep entry
 
 Since SteamOS 3.6 only an allowlisted subset of `/etc` carries into a new A/B
-image — see [SteamOS persistence](../../README.md#steamos-persistence). The
+image — see [SteamOS persistence](../../docs/steamos-platform-notes.md#steamos-persistence). The
 default list covers `/etc/systemd/system/*.service`, so the unit and its enable
 symlink survive on their own. It does not cover `/etc/coolercontrol`, and
 losing that directory is the one failure here that is more than cosmetic: the
