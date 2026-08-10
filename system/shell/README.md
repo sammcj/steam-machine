@@ -46,7 +46,7 @@ So editing `bashrc.d/aliases.sh` takes effect in the next shell with nothing to 
 
 ## Persistence
 
-Trivial, and worth stating because it is the *exception* in this repo rather than the rule. `~/.bashrc` and the repo checkout are both on `/home`, which is its own partition. A SteamOS A/B update replaces `/usr` wholesale and carries only [an allowlisted subset of `/etc`](../../README.md#steamos-persistence); it does not touch `/home`. So there is no `atomic-update.conf.d` entry and no `--boot` self-heal here — there is nothing for an update to take away.
+Trivial, and worth stating because it is the *exception* in this repo rather than the rule. `~/.bashrc` and the repo checkout are both on `/home`, which is its own partition. A SteamOS A/B update replaces `/usr` wholesale and carries only [an allowlisted subset of `/etc`](../../docs/steamos-platform-notes.md#steamos-persistence); it does not touch `/home`. So there is no `atomic-update.conf.d` entry and no `--boot` self-heal here — there is nothing for an update to take away.
 
 ## PATH ordering
 

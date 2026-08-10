@@ -35,7 +35,7 @@ kernel default, `acpi_enforce_resources=strict`, makes the driver back off
 rather than share the range. The result is that **this machine has no SMBus at
 all** — no `i2c-N SMBus PIIX4 adapter port N` entries in `i2cdetect -l`.
 
-So the earlier hypothesis in the top-level README — that OpenRGB was talking to
+So the earlier hypothesis — that OpenRGB was talking to
 the wrong `i2c-piix4` port — was wrong. There were no ports to choose between.
 Nothing on the DIMMs is reachable, RGB controllers at `0x60-0x67` included.
 
@@ -45,7 +45,7 @@ under `/sys/module/acpi/parameters/`.
 
 ### Why this is handled carefully
 
-Per the platform notes in the top-level README: **AM5 has no hardware SPD write
+Per the [platform notes](../../docs/steamos-platform-notes.md#smbus-and-i2c-on-am5): **AM5 has no hardware SPD write
 protection.** `i2c-piix4` calls `i2c_register_spd_write_enable()`
 unconditionally, and unlike Intel's `i2c-i801` there is no `SMBHSTCFG_SPD_WD`
 bit for the BIOS to set. The DDR5 SPD EEPROMs at `0x50-0x57` are always
