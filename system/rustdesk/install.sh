@@ -14,6 +14,17 @@
 #   /etc/systemd/system/rustdesk.service        the unit (keep-listed, persists)
 #   /root/.config/rustdesk/RustDesk2.toml       config (/root is an offload
 #                                               bind mount, so it persists)
+#   ~/.config/systemd/user/rustdesk-desktop-mode.service
+#                                               the Desktop Mode gate (/home)
+#   /etc/polkit-1/rules.d/60-steam-machine-rustdesk.rules
+#                                               lets the gate start the service
+#   /etc/atomic-update.conf.d/steam-machine-rustdesk.conf   keeps the above
+#
+# DESKTOP MODE ONLY. The service has no [Install] section and never starts at
+# boot. RustDesk cannot capture anything in Game Mode -- the gamescope portal
+# has no RemoteDesktop interface -- and left running there it spins a shell
+# pipeline at ~65 Hz looking for a session it will never find, costing 80% of a
+# core and 520 forks/s. See bin/rustdesk-in-desktop-mode and README.md.
 #
 # /usr is the only writable-ish location that works, and not by choice:
 # rustdesk's is_installed() is
@@ -61,11 +72,90 @@ UNIT_DEST="/etc/systemd/system/$UNIT"
 CONF_TMPL="$REPO_DIR/config/RustDesk2.toml.template"
 CONF_DEST="/root/.config/rustdesk/RustDesk2.toml"
 
+POLKIT_RULE="/etc/polkit-1/rules.d/60-steam-machine-rustdesk.rules"
+KEEP_CONF="/etc/atomic-update.conf.d/steam-machine-rustdesk.conf"
+GATE_CHECK="$REPO_DIR/bin/rustdesk-in-desktop-mode"
+
+# The Desktop-Mode gate. See systemd/user/rustdesk-desktop-mode.service.
+USER_UNIT="rustdesk-desktop-mode.service"
+USER_UNIT_SRC="$REPO_DIR/systemd/user/$USER_UNIT"
+USER_UNIT_DIR="/home/deck/.config/systemd/user"
+USER_UNIT_DEST="$USER_UNIT_DIR/$USER_UNIT"
+USER_WANTS_DIR="$USER_UNIT_DIR/plasma-workspace.target.wants"
+USER_WANTS_LINK="$USER_WANTS_DIR/$USER_UNIT"
+
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # need_root() now comes from lib/elevate.sh -- it elevates before dying.
+
+# --- /etc and the user unit ---------------------------------------------------
+# repo-relative source -> absolute destination, for everything dropped in /etc.
+#
+# rustdesk.service is listed even though /etc/systemd/system/*.service is on
+# SteamOS's default keep list. Restoring it costs a cmp against one small file,
+# and the alternative -- assuming it is there -- is how you end up debugging a
+# missing service after a botched update.
+declare -A ETC_CONFIG=(
+    ["systemd/$UNIT"]="$UNIT_DEST"
+    ["polkit-1/rules.d/60-steam-machine-rustdesk.rules"]="$POLKIT_RULE"
+    ["atomic-update.conf.d/steam-machine-rustdesk.conf"]="$KEEP_CONF"
+)
+
+# Reinstall anything missing or modified. Cheap and idempotent, so it is safe on
+# the --boot fast path. Returns 0 if it changed nothing, 1 if it restored
+# something -- the caller decides whether that warrants a daemon-reload.
+ensure_etc_config() {
+    local src changed=0
+    for src in "${!ETC_CONFIG[@]}"; do
+        if ! cmp -s "$REPO_DIR/$src" "${ETC_CONFIG[$src]}"; then
+            install -Dm644 "$REPO_DIR/$src" "${ETC_CONFIG[$src]}"
+            warn "restored ${ETC_CONFIG[$src]} (was missing or modified)"
+            changed=1
+        fi
+    done
+    return $changed
+}
+
+# The user unit lives under /home, which no A/B update touches, so this is
+# belt-and-braces rather than the load-bearing persistence mechanism.
+#
+# The .wants symlink is written by hand rather than via `systemctl --user
+# enable`. Running that as root needs the target user's XDG_RUNTIME_DIR and a
+# live user manager, neither of which is guaranteed from an ExecStartPre;
+# writing the symlink is exactly what enable does, and it works with no manager
+# running at all.
+ensure_user_unit() {
+    local changed=0
+    # Explicitly, and before the file: `install -D` creates missing parents
+    # owned by whoever is running it, i.e. root. A root-owned
+    # ~/.config/systemd/user is not a permission error you would ever guess
+    # from the symptom -- the user manager simply ignores the tree.
+    install -d -o deck -g deck "$USER_UNIT_DIR" "$USER_WANTS_DIR"
+    if ! cmp -s "$USER_UNIT_SRC" "$USER_UNIT_DEST"; then
+        install -Dm644 -o deck -g deck "$USER_UNIT_SRC" "$USER_UNIT_DEST"
+        warn "restored $USER_UNIT_DEST (was missing or modified)"
+        changed=1
+    fi
+    if [[ ! -L "$USER_WANTS_LINK" ]]; then
+        ln -sf "../$USER_UNIT" "$USER_WANTS_LINK"
+        chown -h deck:deck "$USER_WANTS_LINK"
+        warn "re-enabled $USER_UNIT (wants symlink was missing)"
+        changed=1
+    fi
+    # Best effort: the user manager only needs telling if it is running, and it
+    # is not during a Game Mode boot. Failure here is not an error.
+    if (( changed )); then
+        runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 \
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# True if a Desktop Mode session is active right now. Same check the unit's
+# ExecCondition makes -- kept in one place so they cannot drift.
+in_desktop_mode() { "$GATE_CHECK"; }
 # --- SteamOS read-only rootfs -------------------------------------------------
 RO_WAS_ENABLED=0
 unlock_rootfs() {
@@ -361,39 +451,83 @@ EOF
 do_install() {
     need_root
     trap relock_rootfs EXIT
-    [[ -f "$UNIT_SRC"  ]] || die "missing $UNIT_SRC"
-    [[ -f "$CONF_TMPL" ]] || die "missing $CONF_TMPL"
+    local src
+    for src in "${!ETC_CONFIG[@]}"; do
+        [[ -f "$REPO_DIR/$src" ]] || die "missing $REPO_DIR/$src"
+    done
+    [[ -f "$USER_UNIT_SRC" ]] || die "missing $USER_UNIT_SRC"
+    [[ -f "$CONF_TMPL"     ]] || die "missing $CONF_TMPL"
+    [[ -x "$GATE_CHECK"    ]] || die "$GATE_CHECK is not executable"
 
     fetch_pkg
     unlock_rootfs
     extract_pkg
 
-    log "installing $UNIT_DEST"
-    install -Dm644 "$UNIT_SRC" "$UNIT_DEST"
+    log "installing unit, polkit rule and A/B update keep entry"
+    for src in "${!ETC_CONFIG[@]}"; do
+        install -Dm644 "$REPO_DIR/$src" "${ETC_CONFIG[$src]}"
+    done
     systemctl daemon-reload
+
+    log "installing the Desktop Mode gate ($USER_UNIT)"
+    ensure_user_unit
+
+    # An install over the top of the pre-gate version leaves the old
+    # multi-user.target.wants symlink behind, which would keep starting the
+    # service at boot into Game Mode -- the exact thing this is here to stop.
+    # `disable` still removes stale symlinks for a unit with no [Install].
+    #
+    # Tested for by the symlink, not by `is-enabled`: with no [Install] section
+    # that answers `static` and exits 0, so it would report every install as
+    # needing this.
+    if [[ -e /etc/systemd/system/multi-user.target.wants/$UNIT ]]; then
+        log "removing the boot-time start left by the pre-gate version"
+        systemctl disable "$UNIT" >/dev/null 2>&1 || true
+    fi
 
     write_config
     apply_firewall
 
-    log "enabling and starting $UNIT"
-    systemctl enable --now "$UNIT" || warn "could not start $UNIT"
+    if in_desktop_mode; then
+        log "Desktop Mode is active -- starting $UNIT now"
+        systemctl restart "$UNIT" || warn "could not start $UNIT"
+    else
+        log "Game Mode -- $UNIT stays stopped; it starts on the next switch to Desktop"
+        systemctl stop "$UNIT" >/dev/null 2>&1 || true
+    fi
 
     log "done"
     echo
     do_status
     cat <<EOF
 
-NEXT: set the password, with a desktop session active on the TV --
+NEXT: switch to Desktop Mode (Steam -> Power -> Switch to Desktop). RustDesk
+starts with the session and stops when you leave it; it no longer runs in Game
+Mode at all. Then set the password --
   sudo $REPO_DIR/install.sh --password
 Then connect from another machine on this LAN by IP, not by ID:
   192.168.0.9:$PORT
 EOF
 }
 
-# Boot path, from the unit's ExecStartPre. /usr may have been wiped by an update.
+# Self-heal path, from the unit's ExecStartPre. /usr may have been wiped by an
+# update.
+#
+# Since the Desktop Mode gate this no longer runs at boot -- the unit has no
+# [Install] section, so ExecStartPre fires on entry to Desktop Mode instead.
+# Everything restored here is needed only when the service is about to run, so
+# that is the correct moment; nothing in this subsystem depends on having run
+# earlier. The two pieces that DO have to be right before this point are the
+# polkit rule (keep-listed) and the user unit (under /home) -- and both are
+# checked below anyway, on the off chance something removed them by hand.
+#
+# Deliberately before any fast-path exit.
 do_boot() {
     need_root
     trap relock_rootfs EXIT
+
+    ensure_etc_config || systemctl daemon-reload || true
+    ensure_user_unit
 
     if ! installed_ok; then
         warn "/usr/share/rustdesk is missing -- restoring from cache"
@@ -431,10 +565,42 @@ do_status() {
     echo -n "cached package:         "
     verify_pkg && echo "$PKG (checksum OK)" || echo "MISSING or CORRUPT"
 
+    # NOT `is-enabled`. The unit has no [Install] section by design, so
+    # is-enabled answers `static` forever and says nothing about whether the
+    # thing will ever run. What matters is the user-side gate and the current
+    # mode, so report those instead.
     echo -n "service:                "
-    if systemctl is-enabled --quiet "$UNIT" 2>/dev/null; then
-        echo "enabled, $(systemctl is-active "$UNIT" 2>/dev/null)"
-    else echo "NOT enabled"; fi
+    echo "$(systemctl is-active "$UNIT" 2>/dev/null) (no boot-time start, by design)"
+
+    echo -n "desktop-mode gate:      "
+    if [[ -L "$USER_WANTS_LINK" ]] && cmp -s "$USER_UNIT_SRC" "$USER_UNIT_DEST"; then
+        echo "enabled ($USER_UNIT wanted by plasma-workspace.target)"
+    elif [[ -f "$USER_UNIT_DEST" ]]; then
+        echo "PRESENT BUT NOT ENABLED -- re-run the installer"
+    else
+        echo "MISSING -- RustDesk will never start; re-run the installer"
+    fi
+
+    # /etc/polkit-1/rules.d is 0750 root:polkitd, so an unprivileged [[ -f ]] on
+    # anything under it is false whether or not the file exists -- the same trap
+    # as /root above. Reporting that as MISSING sends you reinstalling a rule
+    # that is already in place.
+    echo -n "polkit rule:            "
+    if [[ ! -r /etc/polkit-1/rules.d ]]; then
+        echo "unverifiable as $(id -un) (dir is 0750) -- re-run with sudo"
+    elif [[ -f "$POLKIT_RULE" ]] && cmp -s "$REPO_DIR/polkit-1/rules.d/60-steam-machine-rustdesk.rules" "$POLKIT_RULE"; then
+        echo "installed"
+    else
+        echo "MISSING or MODIFIED -- the gate cannot start the service"
+    fi
+
+    echo -n "A/B update keep entry:  "
+    [[ -f "$KEEP_CONF" ]] && echo "installed" \
+        || echo "MISSING (polkit rule will be lost on next OS update)"
+
+    echo -n "current mode:           "
+    if in_desktop_mode; then echo "Desktop -- RustDesk is allowed to run"
+    else echo "Game -- RustDesk is gated off (ExecCondition would skip a start)"; fi
 
     # /root is 0700, so an unprivileged [[ -f ]] on anything under it is false
     # whether or not the file exists. Reporting that as MISSING sends you
@@ -475,9 +641,12 @@ do_uninstall() {
     need_root
     trap relock_rootfs EXIT
     systemctl disable --now "$UNIT" >/dev/null 2>&1 || true
+    rm -f "$USER_WANTS_LINK" "$USER_UNIT_DEST"
+    runuser -u deck -- env XDG_RUNTIME_DIR=/run/user/1000 \
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
     remove_firewall
     unlock_rootfs
-    rm -f "$UNIT_DEST" "$BIN"
+    rm -f "$UNIT_DEST" "$POLKIT_RULE" "$KEEP_CONF" "$BIN"
     rm -rf "$SHARE"
     systemctl daemon-reload
     warn "removed. Config left at /root/.config/rustdesk and cache at $CACHE_DIR"

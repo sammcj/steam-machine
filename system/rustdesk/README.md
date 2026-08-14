@@ -120,6 +120,57 @@ both interfaces.
 `is_x11()` is a `lazy_static`, evaluated once per `--server` process, so
 switching session type needs a service restart, not just a reconnect.
 
+## Desktop Mode only, and what it cost to find out
+
+**The service does not start at boot and does not run in Game Mode.** It is started by a systemd *user* unit in the Plasma session and stopped when that session ends. This is not tidiness — left running in Game Mode it is one of the most expensive processes on the machine.
+
+### What it does when it cannot find a session
+
+The section above establishes that Game Mode has no `RemoteDesktop` portal, so `--server` falls through to an X11 path with no `DISPLAY`. RustDesk does not treat that as fatal and does not back off. It re-runs its session probe forever:
+
+```sh
+sh -c "ps -u 1000 -f | grep -E 'Xwayland' | grep -v 'grep' | tail -1 \
+       | awk '{print \$2}' | xargs -I__ cat /proc/__/environ 2>/dev/null \
+       | tr '\0' '\n' | grep '^WAYLAND_DISPLAY=' | tail -1 | sed 's/WAYLAND_DISPLAY=//g'"
+```
+
+Eight processes per iteration, roughly 65 iterations a second. Measured on 2026-08-14 with a game running:
+
+| | |
+|---|---|
+| fork rate | **520/s** (275,384 forks in 529 s of uptime, from `/proc/stat`) |
+| CPU | **621 s in 778 s of uptime** — 80% of a core, permanently |
+| per-iteration cost | a full `/proc` walk, under the task-list lock, while the game holds thousands of threads |
+
+Two details make this worse than the raw numbers suggest. `ps -u 1000 -f` reads every process in `/proc`, so the cost *scales with what else is running* — it is most expensive exactly when a game is loaded. And the work is invisible in the obvious places: `top` shows `rustdesk` at ~0% because no single child lives long enough to accumulate, and `ps` sampling never catches the children at all. The way to see it is `cminflt` deltas from `/proc/<pid>/stat`, which count faults charged back by *reaped* children:
+
+```
+$ # 6-second delta, per process
+3416  rustdesk   cminflt+827302  cutime+345  cstime+192
+```
+
+`systemctl show rustdesk -p CPUUsageNSec` tells the same story in one line, and is the check worth remembering.
+
+### How the gate works
+
+| piece | where | role |
+|---|---|---|
+| `rustdesk-desktop-mode.service` | `~/.config/systemd/user/` | `WantedBy=plasma-workspace.target` — starts and stops the system unit |
+| `60-steam-machine-rustdesk.rules` | `/etc/polkit-1/rules.d/` | lets `deck` do that without an auth prompt |
+| `bin/rustdesk-in-desktop-mode` | this repo | the unit's `ExecCondition=`, a backstop against a manual start |
+
+`plasma-workspace.target` is the discriminator. It is `static` and only a Plasma session pulls it in; Game Mode reaches `graphical-session.target` and `gamescope-session.target` and never touches it. So the gate is event-driven — no timer, no poll, nothing that has to notice a mode switch. `PartOf=` is what makes the stop happen on the way out.
+
+Note what is *not* used: `loginctl show-session … -p Type` answers `wayland` in both modes and is useless here. The `Desktop` property does discriminate (`gamescope` vs `KDE`) and is what the `ExecCondition` script reads, but it is the backstop, not the trigger.
+
+`rustdesk.service` has **no `[Install]` section** on purpose. Leaving the unit merely disabled would let a stray `systemctl enable rustdesk` quietly restore the boot-time start; with no `[Install]`, that command fails loudly instead.
+
+### Consequences worth knowing
+
+- **`install.sh --boot` now runs on entry to Desktop Mode, not at boot**, because it is the unit's `ExecStartPre`. Everything it restores (`/usr/bin/rustdesk`, `/usr/share/rustdesk`, the runtime firewall rules) is needed only when the service is about to run, so this is the correct moment — and a boot into Game Mode now costs nothing at all, where before it cost a package extract after every OS update.
+- **The first Desktop Mode entry after a SteamOS update is slower**, since that extract happens then. The user unit uses `systemctl --no-block` so it does not time out waiting.
+- **The firewall rules are re-applied at that point too.** They are runtime-only by design (`/etc/firewalld` is not keep-listed), so they are absent between a reboot and the first Desktop Mode entry. That is correct: nothing is listening on 21118 in the meantime.
+
 ## The password cannot be written by hand
 
 Stored in `RustDesk.toml` (not `RustDesk2.toml`) as:
@@ -165,25 +216,33 @@ configured for.
 
 ## Turning it on and off
 
-There is no front end for this — `install.sh` has no `--enable`/`--disable` the way `hardware/coolercontrol/` does. It is plain systemd:
+**Normally you do not.** Switching to Desktop Mode starts it; leaving Desktop Mode stops it. That is the whole interface, and it is the one the gate above implements.
+
+To override by hand:
 
 ```bash
-sudo systemctl stop rustdesk             # stop now; still starts on the next boot
-sudo systemctl start rustdesk
+sudo systemctl start rustdesk            # skipped with a "condition failed" note
+                                         # if you are in Game Mode
+sudo systemctl stop rustdesk             # stops it inside a Desktop session
 
-sudo systemctl disable --now rustdesk    # stop now, and don't start on boot
-sudo systemctl enable --now rustdesk
-
-./install.sh --status                    # unit state, config, firewall, listener
+./install.sh --status                    # unit state, gate, polkit rule, current
+                                         # mode, config, firewall, listener
 ```
 
-Nothing is uninstalled either way. The binary, the config, the unit and the cached package all stay put, so re-enabling is instant and needs no re-provisioning — `--password` in particular does not need doing again.
+To turn the whole thing off for good, remove the gate rather than the service — the service has no `[Install]` section, so `systemctl disable rustdesk` has nothing to disable and `enable` fails:
 
-**Both states survive a SteamOS A/B update.** The enable symlink lives under `/etc/systemd/system/multi-user.target.wants/`, which is on the keep list, and "off" is simply the absence of that symlink.
+```bash
+systemctl --user disable rustdesk-desktop-mode.service   # as deck, no sudo
+sudo systemctl stop rustdesk
+```
 
-**Any `start` or `enable --now` re-applies the firewall rules**, because they run the unit's `ExecStartPre=install.sh --boot`, which restores `/usr/bin/rustdesk` and calls `apply_firewall`. This matters because those rich rules are deliberately runtime-only, not `--permanent` (`/etc/firewalld` is not keep-listed) — so they do not survive a reboot on their own, and the service starting is what puts them back.
+Nothing is uninstalled either way. The binary, the config, the units and the cached package all stay put, so re-enabling is instant and needs no re-provisioning — `--password` in particular does not need doing again.
 
-The corollary: **`stop` and `disable` do not remove the rules** — only `--uninstall` does. That is harmless, since a rule restricting a port nothing is listening on costs nothing, but it does mean `firewall-cmd --list-rich-rules` still showing 21118 is not evidence the service is running. Check the unit, not the firewall.
+**Both states survive a SteamOS A/B update.** The user unit and its `.wants` symlink live under `/home`, which an A/B update does not touch at all, and "off" is simply the absence of that symlink. The polkit rule is in `/etc/polkit-1/rules.d`, which is *not* on the keep list — `atomic-update.conf.d/steam-machine-rustdesk.conf` names it, and `--boot` restores it. Losing it is the one failure that is hard to read: the service just never starts in Desktop Mode, and `systemctl status rustdesk` reports a healthy inactive unit with nothing wrong in its journal, because the refusal happens in the *user* manager.
+
+**Any `start` re-applies the firewall rules**, because it runs the unit's `ExecStartPre=install.sh --boot`, which restores `/usr/bin/rustdesk` and calls `apply_firewall`. This matters because those rich rules are deliberately runtime-only, not `--permanent` (`/etc/firewalld` is not keep-listed) — so they do not survive a reboot on their own, and the service starting is what puts them back.
+
+The corollary: **`stop` does not remove the rules** — only `--uninstall` does. That is harmless, since a rule restricting a port nothing is listening on costs nothing, but it does mean `firewall-cmd --list-rich-rules` still showing 21118 is not evidence the service is running. Check the unit, not the firewall.
 
 Two traps, both covered in more detail above:
 

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Exit 0 in Desktop Mode, 1 in Game Mode.
+#
+# Used as rustdesk.service's ExecCondition=. A failing ExecCondition marks the
+# unit *skipped*, not failed -- no journal noise, no Restart=on-failure loop.
+#
+# WHY THIS EXISTS
+#
+# RustDesk cannot capture anything in Game Mode: the gamescope portal
+# implements ScreenCast but not RemoteDesktop, so `--server` falls through to
+# an X11 path with no DISPLAY (see ../README.md, "Capture path"). It does not
+# treat that as fatal. Instead the `--server` child re-runs its session-probe
+# pipeline forever with no backoff:
+#
+#     sh -c "ps -u 1000 -f | grep -E 'Xwayland' | grep -v grep | tail -1
+#            | awk '{print $2}' | xargs -I__ cat /proc/__/environ
+#            | tr '\0' '\n' | grep '^WAYLAND_DISPLAY=' | tail -1 | sed ..."
+#
+# Eight processes an iteration, ~65 iterations a second. Measured on this
+# machine on 2026-08-14, mid-game: 520 forks/s (275,384 forks in 529 s of
+# uptime, from /proc/stat) and 621 s of CPU in 778 s of uptime -- 80% of a core,
+# permanently. Every iteration also runs `ps -u 1000 -f`, which walks all of
+# /proc under the task-list lock while the game holds thousands of threads.
+#
+# So the gate is not tidiness. Game Mode is the one mode where the service can
+# only ever cost and never deliver.
+#
+# THE CHECK
+#
+# logind's per-session Desktop property, which is what RustDesk's own
+# get_display_server() reads seat0 for. Game Mode reports `gamescope`; a Plasma
+# session reports `KDE`. Type= is no use here -- it answers `wayland` in both.
+#
+# Deliberately inverted: anything that is *not* gamescope is allowed through.
+# An empty or unreadable value therefore permits the start rather than blocking
+# it, which is the right way round -- the actual trigger is the user unit that
+# only exists under plasma-workspace.target, and this is the backstop against a
+# stray `systemctl start` at the wrong moment, not the gate itself.
+set -uo pipefail
+
+session="$(loginctl show-seat seat0 -p ActiveSession --value 2>/dev/null)" || session=""
+[[ -n $session ]] || exit 0
+
+desktop="$(loginctl show-session "$session" -p Desktop --value 2>/dev/null)" || desktop=""
+
+[[ $desktop == "gamescope" ]] && exit 1
+exit 0

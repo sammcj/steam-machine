@@ -1,26 +1,16 @@
 # DIY Steam Machine Scripts & Helpers
 
-- [WIP](#wip)
 - [TODO](#todo)
 - [Working (done)](#working-done)
   - [Not working (yet)](#not-working-yet)
 - [Hardware](#hardware)
 - [Platform notes](#platform-notes)
+  - [After a SteamOS update: one command](#after-a-steamos-update-one-command)
   - [SteamOS persistence](#steamos-persistence)
+  - [SMT is off in the BIOS](#smt-is-off-in-the-bios)
   - [SMBus and I2C on AM5](#smbus-and-i2c-on-am5)
   - [Display: 4K120 over HDMI (amdgpu)](#display-4k120-over-hdmi-amdgpu)
   - [Onboard wireless (MediaTek MT7902)](#onboard-wireless-mediatek-mt7902)
-
-## WIP
-
-- HDMI 2.1 FRL (4K120), see [hardware/kernel/README.md](hardware/kernel/README.md)
-- **2026 Steam Controller on a mainline kernel** — Valve's `hid-steam` driver for the new controller backported out of SteamOS onto mainline 7.2-rc6, as [patches 0007-0008](hardware/kernel/patches/README.md). **Working** — all nine puck interfaces bind to `hid-steam` instead of `hid-generic`, and `/dev/input/js*` gamepad nodes appear.
-
-  Worth flagging because of where it is *not*: as of 2026-08-08 neither `torvalds/linux.git` nor the HID maintainer tree carries any of it — the newest `hid-steam.c` commits in both are from the 6.15 era, and nothing referencing IBEX, PROTEUS or NEREID exists in public kernel git. Valve have not posted the series to linux-input, and their own git needs credentials, so the only public copy is inside a 3.5 GB SteamOS source package.
-
-  The useful finding is that Valve's 6.18 driver **compiles against 7.2-rc6 with no source changes at all**, so those two patches are all any mainline kernel needs to get a real in-kernel gamepad node for the controller and its puck — Steam not required. The one trap: take the four device IDs into `hid-ids.h`, never Valve's whole header, which predates IDs 7.2 added and breaks unrelated HID drivers.
-
-  (Not a claim that nobody else has done this — only that it is not upstream and no public backport turned up.)
 
 ## TODO
 
@@ -55,63 +45,42 @@ Priorities below are (H)igh, (M)edium, (L)ow.
 - **Sleep during remote sessions** - the machine kept suspending out from under SSH sessions. It is not systemd idle (`logind.conf` sets no `IdleAction`): Steam's Deck-UI sleep timer asks logind to suspend, and an SSH session is not activity as far as gamescope is concerned. Because the request goes *through* logind it can be refused, so a root daemon now holds a `block` inhibitor on `sleep` while any sshd session exists, plus a 30-minute grace window after the last one ends (cut from two hours on 2026-08-03, after the journal showed only two suspends in three days - a machine that never sleeps wastes more than any idle tunable saves). A polkit rule additionally lets `deck` take the same lock by hand (`keepawake 4h`) - without it a remote `systemd-inhibit` hangs on an unanswerable password prompt, because an SSH session is neither "active" nor "inactive" to polkit and falls through to `auth_admin_keep`. See [hardware/sleep/](hardware/sleep/README.md).
 - **sshd policy pinned, and keepalives enabled** - `/etc/ssh/sshd_config.d/10-steam-machine.conf` was tracked nowhere and pinned by nothing; the keep list covers `/etc/ssh/*_key` and nothing else, so `AllowUsers deck` and `PermitRootLogin no` would have silently reverted to stock Arch defaults on the next A/B update - a quiet loosening of access policy with no symptom at all. Now in the repo, allowlisted, with a boot self-heal that validates via `sshd -t` and rolls back rather than risking a lockout. Also sets `ClientAliveInterval 60` / `ClientAliveCountMax 5`: with keepalives off (the default) a dropped client leaves its session registered with logind for up to ~2 h 11 m of TCP timeout, which would pin the machine awake through the inhibitor above. The two are a pair. See [system/ssh/](system/ssh/README.md).
 - **Idle power** - `powertop` was run because the CPU appeared pinned at 4 GHz+ at idle. It is not: `scaling_cur_freq` and `/proc/cpuinfo` both derive from APERF/MPERF, which on AMD only tick in C0, so they report the clock during the awake slices and are blind to halted time. Measured residency is 93% idle (77% in C3), and `amd-pstate-epp` is already doing the right thing by racing to clock and dropping back into CC6. Of powertop's ~45 suggestions three survived triage: `kernel.nmi_watchdog=0`, `vm.dirty_writeback_centisecs=1500`, and SATA `med_power_with_dipm` on the two MX500s. Its 41 "Bad" runtime-PM entries reduce to about four decisions - ~20 are PCI devices with no driver bound, so `auto` has nothing to invoke; five are the single fact that one xHCI controller cannot suspend while the controllers and headset plugged into it are pinned on; one is a powertop bug (it string-compares `snd_hda` `power_save` against "1" when the value is "10" and all three codecs are already suspended). Every rejection is recorded with its evidence so the next powertop run doesn't re-derive them. See [system/power/](system/power/README.md).
+- **RGB lighting off, and staying off** - motherboard (ITE IT5711) and Kingston FURY DDR5 both blanked via OpenRGB **Static**, which commits to the controller and survives a power cycle. The DIMMs were never an OpenRGB gap but an ACPI one: `acpi_enforce_resources=strict` made `i2c-piix4` register **zero** adapters. The stock `/usr/lib/udev/rules.d/60-openrgb.rules` is owned by no package and grants uaccess to *every* i2c bus including the SMBus with the always-writable SPD EEPROMs; replaced by a narrow rule in `/etc`. See [hardware/rgb/](hardware/rgb/README.md). Only the GPU shroud strip is left - see below.
+- **2026 Steam Controller on a mainline kernel** - Valve's `hid-steam` backported onto 7.2-rc6 as [patches 0007-0008](hardware/kernel/patches/README.md); all nine puck interfaces bind it and `/dev/input/js*` appears. It is **not upstream** — nothing referencing IBEX/PROTEUS/NEREID exists in public kernel git, and the only public copy is inside a 3.5 GB SteamOS source package. Valve's 6.18 driver compiles against 7.2-rc6 unmodified, so those two patches are all any mainline kernel needs.
 - **Shell setup in the repo** - the aliases and `PATH`/env exports that were only ever in `~/.bashrc`: `g`/`p`/`P`/`gitwip`, the `cc`/`ccd`/`cccd`/`ccrd` Claude Code aliases, `vi`, and the Homebrew / `~/.local/bin` / `.NET SDK` `PATH` setup. Sourced from the repo rather than copied, so the version under git is the one actually in use. `trigger_detect_tv` was the one machine-specific alias and was stale - it wrote to a hardcoded `dri/0/DP-1` path; it now calls `display-redetect`, the same script the four automatic triggers run. The subsystem-specific shell functions (`keepawake`, `wayland`, `coolercontrol`) stay with their own hardware. See [system/shell/](system/shell/README.md).
 
 ### Not working (yet)
 
-#### VRR through the DP converter (L)
-
-4K120 is done; VRR is not, and **is not worth chasing on this adapter**. Tested and reverted 2026-08-02.
-
-`amdgpu` whitelists DP-to-HDMI converters by branch device ID. `freesync_pcon_allow_all=1` bypasses that, and the bypass worked - the UGREEN identified as `branch_dev_id : 2818800` (`0x2B02F0`). But VRR stayed `incapable` / `vrr_range 0-0` anyway.
-
-Re-measured 2026-08-10 on a second converter that turned out to be the **same Chrontel CH7218** (`0x2B02F0` again): `amdgpu` needs three conditions, and the converter meets two of them - `ADAPTIVE_SYNC_SDP_SUPPORT` (DPCD 0x2214 bit 0) and `allow_invalid_MSA_timing_param` (DPCD 0x007 bit 6) are both set. **The whitelist is the only unmet condition**, so a one-line kernel patch is a real if unproven shot, against the counter-evidence that bypassing it on Valve 6.16 delivered nothing. `freesync_pcon_allow_all` does not exist on mainline 7.2-rc6, so a source patch is the only route. See [`hardware/display/4k120-paths.md`](hardware/display/4k120-paths.md).
-
-A vertical seam also appeared at 4K120 in that session. Neither the parameter nor ODM combine causes it: ODM 2:1 is active regardless (it's the only way 1188 MHz runs on the converter path) and the seam went away with ODM still on. Cause unresolved, not recurring; the session's X11-vs-Wayland state was never recorded, which is the likely confound. Detail in [hardware/display/](hardware/display/README.md).
-
-Dropped to (L): it would need a different converter, or upstream FRL on a 7.2+ kernel.
-
-**Update 2026-08-06: the converter is no longer in the chain**, so this entry is now history - 4K120 runs over the native HDMI port on a 7.2-rc6 build with FRL, and **VRR works**. Stock 7.2 shipped FRL *without* HDMI VRR, deliberately; Fangzhi Zuo at AMD posted a 4-patch series on 30 July 2026 adding it over the FRL path, Reviewed-by Harry Wentland. Unmerged, but hand-ported onto the 7.2-rc6 build and now running: `vrr_range Min: 40 Max: 120`, `vrr_capable 1`. The patches are in [hardware/kernel/patches/](hardware/kernel/patches/). See [hardware/kernel/](hardware/kernel/README.md).
-
-#### HDMI CEC (M)
-
-Does not work **on the native HDMI port**, and moving to it did not fix it. Verified 2026-08-07 from `amdgpu.ko`'s own symbol table rather than inferred: every CEC symbol the module imports is either `cec_notifier_*` (publishes the EDID physical address *for* a separate CEC adapter driver; allocates nothing) or `drm_dp_cec_*` (CEC-Tunnelling-over-AUX, which needs a DP→HDMI branch device that implements CEC itself). The adapter-registration API - `cec_allocate_adapter`, `cec_register_adapter`, `drmm_connector_hdmi_cec_adapter_register` - is absent entirely, so there is no `/dev/cec*` and nothing to attach one to. The `hdmi_cec_state` debugfs entry reporting `HDMI-CEC status: 1` is the *sink's* advertised capability read over DDC, not a Linux adapter.
-
-**The silicon has no CEC controller either**, so this is not a driver holding back hardware. AMD's own register headers in the 7.2-rc6 tree contain **zero** `CEC` macros across every DCN generation (1.0 → 4.1.0); the DCE-era headers have exactly one, a read-only `DC_PINSTRAPS_BIF_CEC_DIS` pinstrap bit that no code in the kernel reads and which is not a controller (no TX/RX buffer, no logical-address, status or interrupt register). There is no CEC command in the DMUB firmware enum either. Whether HDMI pin 13 is physically wired on this board is unresolved and moot - there is nothing in the ASIC to drive it.
-
-**Reports of "CEC works on my 9070 XT" are the DisplayPort tunnel, not the HDMI port.** [Twsts/steamos-cec-toolkit](https://github.com/Twsts/steamos-cec-toolkit) - a SteamOS CEC toolkit worth knowing about - is built and tested on exactly that card with **a UGREEN DP→HDMI CEC adapter** providing `/dev/cec0`. It was installed here on 2026-08-07 and **removed on 2026-08-08** — with no `/dev/cec0` it could do nothing, and it had put a script in `/etc/systemd/system-sleep/` that ran on every suspend and resume. Worth revisiting only if a CEC-tunnelling DP→HDMI adapter is ever added.
-
-**Confirmed working over the DP tunnel, 2026-08-10.** With a CH7218 converter on `DP-1`, `/dev/cec0` appears by itself: CEC 2.0, physical address `2.0.0.0`, and the C9 answers with vendor `0x00e091` and power status. SteamOS's own `cecd` needs no help - `rc0` (`rc-cec`) and `cecd DP-1` input devices are created at boot, so the TV remote reaches the machine.
-
-That leaves the route this section already proposed, now half-proven: put the converter on a **spare DisplayPort output and an unused TV input** purely as a CEC endpoint, leaving 4K120 FRL on the native HDMI port. The tunnel does not require the output to display anything; gamescope would need pinning to HDMI. Still untested in that configuration. Otherwise a USB CEC adapter (Pulse-Eight, ~$60 AUD) also works. See [`hardware/display/4k120-paths.md`](hardware/display/4k120-paths.md).
-
-##### Onboard WiFi (L)
-- Bluetooth is **now working** - see [hardware/bluetooth/](hardware/bluetooth/README.md) and the [platform note below](#onboard-wireless-mediatek-mt7902).
-- WiFi is unsupported and now deliberately blacklisted - mainline 7.2 binds the device but its firmware does not exist, and the driver's remove path then hangs power-off. Not worth chasing while 2.5G wired works.
-
 #### Controller wake from sleep (H)
-- Wake from bluetooth controller not working (Playstation 5 DualSense)
-- There is an upstream report that the 2026 Steam Controller and its puck also fail to wake from suspend ([bazzite#4873](https://github.com/ublue-os/bazzite/issues/4873)) - **not tested here**, noted only because it touches the same item.
 
-#### Disabling RGB Lighting (M)
-RBG is pretty tacky and certainly distracting in a living room environment.
+- Wake from a Bluetooth controller does not work (PlayStation 5 DualSense).
+- An upstream report says the 2026 Steam Controller and its puck also fail to wake from suspend ([bazzite#4873](https://github.com/ublue-os/bazzite/issues/4873)) — **not tested here**, noted because it is the same item.
 
-##### Kingston RGB RAM
-- **Now detected.** Support was never the problem: it merged in [MR !2435](https://gitlab.com/CalcProgrammer1/OpenRGB/-/merge_requests/2435) on 2024-07-23. The cause was local.
-- **Root cause found (2026-08-02):** it was never a wrong-port problem - there were **no `i2c-piix4` ports at all**. The firmware declares an ACPI OperationRegion over the SMBus I/O range, and `acpi_enforce_resources=strict` (the kernel default) made `i2c-piix4` register zero adapters. Fixed with `acpi_enforce_resources=lax` while setting up sensors; see [hardware/sensors/](hardware/sensors/README.md#the-fch-smbus-is-blocked-by-acpi). Confirmed after the reboot: OpenRGB detects the RAM on `i2c-2` and it is blanked via Static mode. See [hardware/rgb/](hardware/rgb/README.md).
-- Also worried about bricking the RAM with OpenRGB as per [this post](https://github.com/ubihazard/ddr5-spd-recovery). An SPD baseline is now committed at `hardware/sensors/baseline/`, with `hardware/sensors/bin/spd-check.sh` to diff against it.
-- A bespoke SMBus writer was designed and abandoned - see `git log -- hardware/ram/`. It was premised on a wrong-i2c-port theory and on never installing OpenRGB; the real blocker was the ACPI SMBus conflict, and OpenRGB is what actually blanks the DIMMs. Handled by [hardware/rgb/](hardware/rgb/README.md).
+#### VRR through a DP→HDMI converter (L)
 
-##### XFX Radeon RX 9070 XT OC Gaming Edition
-- **The card has no RGB controller - OpenRGB can never detect it as a GPU.** All six I²C buses belonging to `0000:03:00.0` (`AMDGPU SMU 0/1`, `AMDGPU DM i2c hw bus 0-3`) are empty, and nothing on USB/hidraw belongs to the card. Cards OpenRGB does support (Sapphire Nitro+, ASUS TUF, Gigabyte AORUS, PowerColor Red Devil - all already compiled into the installed 1.0rc3) have a real microcontroller on one of those buses; this one does not. Upstream request [#5154](https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/5154) is for this exact card (subsystem `1EAE:8811`) and its "device captures" section is blank, because there is nothing to capture.
-- The shroud strip is a **dumb 5V ARGB slave with an input connector**, not an addressable device. XFX's own wording: *"a full-length 5-volt ARGB element across the shroud"* plus a supplied **sync cable**. Unconnected it runs a hardcoded rainbow from a small onboard driver, which is what makes it look software-reachable.
-- **The fix is to plug the XFX sync cable into one of the board's three ARGB_V2 headers**, at which point the strip becomes a zone of the `B850M FORCE WIFI6E V2` (ITE IT5711) controller OpenRGB already detects. Handled by [hardware/rgb/](hardware/rgb/README.md), which sizes and blanks all three headers so it doesn't matter which one is used. **Pending: cable not yet connected.**
-- Set via OpenRGB's **Static** mode, not Direct - Static is committed to the IT5711 and survives OpenRGB exiting and a power cycle, so the systemd units are a safety net rather than the mechanism.
+Native HDMI FRL has VRR, so this only matters if the converter ever comes back into the chain.
 
-##### OpenRGB access rules
-- The `/usr/lib/udev/rules.d/60-openrgb.rules` on this machine is **owned by no package** (`pacman -Qo` confirms) and was dropped in by hand. `/usr` is replaced wholesale by every A/B update, so it will vanish. It also grants uaccess to *every* i2c bus - including the FCH SMBus with the always-host-writable DDR5 SPD EEPROMs, the exact hazard the section above is paranoid about. Replaced by a narrow two-stanza rule in `/etc` by [hardware/rgb/](hardware/rgb/README.md).
-- While that file is present it **overrides** the narrowing: `install.sh --no-i2c` strips the SMBus stanza from our rule but the blanket `KERNEL=="i2c-[0-99]*"` re-grants the bus anyway (verified - the ACL survived and OpenRGB still saw the RAM). `install.sh --status` reports this, and `--drop-upstream-rules` removes the file after backing it up.
-- There is **no `hid` group** on this system - `/dev/hidraw*` access comes from a `uaccess` POSIX ACL, not group membership. An `i2c` group exists but adding `deck` to it would be worse: group membership is unconditional and machine-wide, while `uaccess` is scoped to the owner of the active seat and revoked on logout.
+Both converters tried here are the **same Chrontel CH7218** (`branch_dev_id 0x2B02F0`), and `amdgpu` needs three conditions to pass VRR through a converter. Two are met — `ADAPTIVE_SYNC_SDP_SUPPORT` (DPCD 0x2214 bit 0) and `allow_invalid_MSA_timing_param` (DPCD 0x007 bit 6). The third is a hardcoded five-OUI whitelist that `0x2B02F0` is not in, so **the whitelist is the only unmet condition**. A one-line kernel patch is a real if unproven shot, against the counter-evidence that bypassing it on Valve 6.16 delivered nothing. `freesync_pcon_allow_all` does not exist on mainline 7.2-rc6, so a source patch is the only route.
+
+Measurements and the full three-way comparison: [`hardware/display/4k120-paths.md`](hardware/display/4k120-paths.md).
+
+#### HDMI CEC on the native port — never (M)
+
+Not a driver gap: **the silicon has no CEC controller.** AMD's register headers in the 7.2-rc6 tree contain zero `CEC` macros across every DCN generation (1.0 → 4.1.0), and the DCE-era headers have one read-only pinstrap bit that no kernel code reads. `amdgpu.ko` imports only `cec_notifier_*` (publishes the physical address *for* someone else's adapter) and `drm_dp_cec_*` (the DisplayPort tunnel); the adapter-registration API is absent entirely, so there is no `/dev/cec*` to attach to. Whether HDMI pin 13 is wired is moot.
+
+**CEC does work over a DP→HDMI converter** (confirmed 2026-08-10) — that is what "CEC works on my 9070 XT" reports actually are. See the [Working](#working-done) entry.
+
+#### RGB: XFX GPU shroud strip (L)
+
+The board and the DIMMs are blanked and stay blanked; only the graphics card's strip is outstanding, and it is a cabling job rather than a software one.
+
+The card has **no RGB controller** — all six of its I²C buses are empty and nothing on USB/hidraw belongs to it, which is why OpenRGB can never see it as a GPU ([upstream #5154](https://gitlab.com/CalcProgrammer1/OpenRGB/-/issues/5154) is this exact card, with a blank captures section). The shroud strip is a dumb 5V ARGB slave with an input connector; unconnected it runs a hardcoded rainbow from a small onboard driver, which is what makes it look software-reachable.
+
+**Fix: plug the supplied XFX sync cable into one of the board's three ARGB_V2 headers**, at which point the strip becomes a zone of the IT5711 controller OpenRGB already drives. [hardware/rgb/](hardware/rgb/README.md) already sizes and blanks all three headers, so it does not matter which is used. **Pending: cable not yet connected.**
+
+#### Onboard WiFi (L)
+
+Unsupported and deliberately blacklisted — mainline 7.2 binds the device but MediaTek have never published its firmware, and the driver's remove path then hangs power-off. Not worth chasing while 2.5G wired works. Bluetooth on the same chip **does** work; see the [platform note](#onboard-wireless-mediatek-mt7902).
 
 ---
 
@@ -159,7 +128,7 @@ Links:
 
 ## Platform notes
 
-The following are **inferred** from Claude searching online - **before** setting Claude up on the hardware itself, when I do that I'll get Claude to validate, correct and enhance these notes.
+Measured on this machine unless a line says otherwise.
 
 ### After a SteamOS update: one command
 
@@ -179,7 +148,7 @@ Note the first boot after an update lands on the **stock Valve kernel**: the upd
 
 SteamOS 3.x boots a read-only btrfs root from an A/B pair. An update writes a whole new image to the inactive slot and boots into it, so anything in `/usr`, `/opt` or `/usr/local` is gone after the next update. That includes anything `pacman -S` installed after `steamos-readonly disable`.
 
-**Btrfs confirmed** (`findmnt -no SOURCE,FSTYPE /` → `/dev/nvme0n1p5 btrfs`). Note that on this box `steamos-readonly status` currently reports **disabled**, so the root is mounted `rw` - that is a local change, not the stock state, and it does not make anything survive an update.
+**Btrfs confirmed** (`findmnt -no SOURCE,FSTYPE /`). The active slot changes with every update — it is `/dev/nvme0n1p4` after the 8 Aug one, having been `p5` before — so never hardcode the partition. `steamos-readonly status` reports **enabled** again after an update even if it was disabled beforehand, which is why every installer here unlocks and relocks around its own writes rather than assuming.
 
 - `/home` - separate partition, always survives.
 - `/etc` - overlayfs with its upper layer in `/var/lib/overlays/etc/upper` (confirmed via `findmnt /etc`). Survives reboots always, and is writable even when `steamos-readonly` is enabled. Since SteamOS 3.6 only an allowlisted subset carries into a new OS version.
@@ -223,36 +192,17 @@ The effect is workload-shaped: a kernel `make modules` is entirely `cc1`, which 
 
 ### Display: 4K120 over HDMI (amdgpu)
 
-**Superseded 2026-08-06 - 4K120 now runs over the native HDMI port**, on a hand-built mainline 7.2-rc6 with FRL enabled. See [hardware/kernel/](hardware/kernel/README.md). Everything below remains accurate as the diagnosis of *why* a SteamOS kernel cannot do it, and describes the DP-converter fallback, which still works.
+Current state and measurements: [hardware/kernel/](hardware/kernel/README.md) for native FRL, [`hardware/display/4k120-paths.md`](hardware/display/4k120-paths.md) for the FRL-vs-converter comparison. What is kept here is only what is not obvious from either.
 
-**Validated on-machine 2026-08-02** - 4K120 over an active DP → HDMI 2.1 converter. Full write-up in [hardware/display/](hardware/display/README.md). Measured on that link: 4 lanes @ HBR3 (8.1 Gbps/lane, 32.4 Gbps), DSC active at 16 bpp from 30 bpp, RGB 4:4:4 10-bit, HDR on, `underflow 0`.
+> **The TV is this machine's only console.** An unsyncable mode is a black screen with no way to type the fix, which happened during this work. Arm a revert timer before any experimental modeset - `(sleep 20; kscreen-doctor output.<out>.mode.<safe-idx>) &`.
 
-That was described at the time as "better than native FRL would have given". **That has now been tested and it is not true**: native FRL delivers 4:4:4 at **12 bpc, uncompressed, on a single pipe** - better on every axis than the converter's 10-bit-with-DSC. The prediction was made against the 4:2:0 workaround below, not against real FRL.
+**Why a SteamOS kernel cannot do 4K120 over HDMI.** Not the cable or the TV — the C9 advertises `VIC 118` and FRL up to 12 Gbps/lane. The HDMI Forum rejected AMD's open-source HDMI 2.1 implementation in 2023-24, leaving `amdgpu` capped at HDMI 2.0's **600 MHz TMDS character rate**; 4:4:4 4K120 needs 1188 MHz. FRL merged for Linux 7.2 and is **off by default**. Valve backported the ALLM/HDMI-VRR half but not FRL.
 
-> **The TV is this machine's only console.** An unsyncable mode = black screen with no way to type the fix, which happened during this work. Arm a revert timer before any experimental modeset - `(sleep 20; kscreen-doctor output.<out>.mode.<safe-idx>) &` - and when unwinding, set a safe mode *first* and remove `force_yuv420_output` *second*. The signal must stay legal at every intermediate step.
+**The enabling parameter is widely misquoted online** as `amdgpu.dc_feature_mask=0x400`. Both parts are wrong: it is spelled `dcfeaturemask`, and it *replaces* the mask rather than OR-ing into it — the live value here is `2`, so it needs `0x402`.
 
-The 4K60 ceiling is not the cable or the TV - the C9's EDID advertises `VIC 118: 3840x2160 120 Hz` and FRL up to 12 Gbps/lane. The HDMI Forum rejected AMD's open-source HDMI 2.1 implementation in 2023-24, leaving `amdgpu` capped at HDMI 2.0's **600 MHz TMDS character rate**. 4K120 at 4:4:4 needs 1188 MHz.
+**Desktop mode is X11 or Wayland depending on how you enter it**, and X11 has no colour management, so wide-gamut content goes to the OLED unmanaged and badly over-saturated with the HDR/WCG/ICC controls missing from KDE entirely. Steam's Power → Switch to Desktop hardcodes X11; booting to desktop gives Wayland. Fix the current session with `steamos-session-select plasma-wayland`.
 
-Confirmed on this kernel by extracting the module rather than trusting release notes - `DC_FRL_MASK` is absent, and every `FRL` string present belongs to the DP-to-HDMI PCON (adapter) path:
-
-```bash
-zstd -d /lib/modules/$(uname -r)/kernel/drivers/gpu/drm/amd/amdgpu/amdgpu.ko.zst -o amdgpu.ko
-strings amdgpu.ko | grep -i frl
-```
-
-Status as of August 2026:
-
-- FRL **merged for Linux 7.2**, in rc now, stable expected late August 2026. It is **off by default** because VRR-over-FRL did not land with it. DSC-over-FRL *did* merge.
-- The enabling parameter is widely misquoted online as `amdgpu.dc_feature_mask=0x400`. **Both parts are wrong**: it is spelled `dcfeaturemask`, and it *replaces* the mask rather than OR-ing into it - on this machine the live value is `2`, so it would need `0x402`.
-- Valve has backported the ALLM/HDMI-VRR half (`allm_mode`, `hdmi_vrr_desktop_mode` both exist here) but **not** FRL. SteamOS 3.8 is on 6.18.42.
-- The out-of-tree work preceding the merge was tested on DCN 4.0.1 - Navi 48, this exact GPU. RDNA4 is the best-tested path.
-
-Until SteamOS rebases onto 7.2+:
-
-- The **active DP-to-HDMI 2.1 converter is the correct fix**, now confirmed in practice. The GPU emits plain DisplayPort, which has no HDMI Forum entanglement. DSC is required, not marketing: 4K120 RGB 10-bit needs ~35.6 Gbps uncompressed against HBR3's ~25.9 Gbps effective; the link negotiated 16 bpp DSC, which is ~19 Gbps. A **passive** DP++ adapter would land back at 4K60.
-- `amdgpu.freesync_pcon_allow_all=1` looks like the fix for VRR through a converter, and **does nothing useful on this hardware** - the adapter doesn't pass FreeSync through regardless, so VRR stays `incapable`. Pinned explicitly to `0`.
-- **Desktop mode is X11 or Wayland depending on how you enter it**, and X11 has no colour management - wide-gamut content goes to the OLED unmanaged and looks badly over-saturated, with HDR/WCG/ICC controls missing from KDE entirely. Steam's Power → Switch to Desktop hardcodes X11; booting into desktop mode gives Wayland. `steamos-session-select plasma-wayland` fixes it for the current session.
-- **4:2:0 does _not_ work out of the box.** The C9's YCbCr 4:2:0 Capability Map lists only 4K60/50, so the driver prunes 4K120 outright. It takes a one-byte EDID patch (ext block byte 93, `0x33`→`0x3f`) *plus* `force_yuv420_output=1`. That combination was measured working and stable, but is 4:2:0 8-bit only - no headroom for 10-bit at 594 MHz - so text is soft and HDR bands. Rejected.
+**4:2:0 was tried and rejected.** It needs a one-byte EDID patch (ext block byte 93, `0x33`→`0x3f`) *plus* `force_yuv420_output=1`, and is 8-bit only — soft text, banded HDR.
 
 ### Onboard wireless (MediaTek MT7902)
 

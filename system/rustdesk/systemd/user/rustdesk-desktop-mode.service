@@ -1,0 +1,41 @@
+[Unit]
+# Installed to /home/deck/.config/systemd/user/, enabled by a .wants symlink in
+# the same tree. NOT /etc/systemd/user -- that directory is not on the SteamOS
+# atomic-update keep list, whereas /home is never touched by an A/B update at
+# all, so the user half of this subsystem needs no keep entry and no self-heal.
+#
+# This is the thing that actually starts RustDesk. rustdesk.service has no
+# [Install] section any more, so nothing starts it at boot; it comes up here,
+# when a Desktop Mode session does, and goes away with it.
+#
+# plasma-workspace.target is the discriminator. It is `static` and pulled in
+# only by a Plasma session -- Game Mode reaches graphical-session.target and
+# gamescope-session.target instead, and never this one. That makes the gate
+# event-driven: no polling, no timer, nothing to notice a mode switch.
+Description=Run RustDesk while a Desktop Mode session is up
+Documentation=file:///home/deck/git/steam-machine/system/rustdesk/README.md
+
+# PartOf, not just After: it is what makes ExecStop fire when the Plasma
+# session ends. Without it, leaving Desktop Mode would leave rustdesk.service
+# running into Game Mode -- exactly the state this subsystem exists to avoid.
+PartOf=plasma-workspace.target
+After=plasma-workspace.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# --no-block on both. rustdesk.service's ExecStartPre may re-extract the whole
+# package from cache after an A/B update, which is far longer than a oneshot's
+# 90 s default timeout; and a blocking stop would hold up session teardown for
+# up to TimeoutStopSec=30 on the way out. The job is queued with PID 1 either
+# way, so it still completes. Anything that goes wrong shows up in
+# `systemctl status rustdesk`, which is where you would look anyway.
+#
+# Permitted by /etc/polkit-1/rules.d/60-steam-machine-rustdesk.rules -- without
+# it these calls fail with an interactive auth prompt that has nobody to answer.
+ExecStart=/usr/bin/systemctl --no-block start rustdesk.service
+ExecStop=/usr/bin/systemctl --no-block stop rustdesk.service
+
+[Install]
+WantedBy=plasma-workspace.target

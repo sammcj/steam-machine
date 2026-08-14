@@ -1,0 +1,33 @@
+// Let `deck` start and stop rustdesk.service without authenticating.
+//
+// rustdesk.service is a system unit, but the thing that decides when it should
+// run is a *user* unit in the Plasma session (rustdesk-desktop-mode.service) --
+// that is the only place in systemd that knows Desktop Mode from Game Mode
+// without polling. A user unit calling `systemctl start` on a system unit goes
+// through polkit:
+//
+//     org.freedesktop.systemd1.manage-units
+//         allow_any=auth_admin_keep  allow_inactive=auth_admin_keep
+//         allow_active=auth_admin_keep
+//
+// auth_admin_keep even for an active local session, so without this rule the
+// call returns "Interactive authentication required" and the service silently
+// never starts -- with the prompt going to a polkit agent that a session in the
+// middle of coming up may not have running yet.
+//
+// Scope: one unit, one user, three verbs. `deck` is the only login user and is
+// already in wheel, so this grants nothing it could not do with `sudo
+// systemctl start rustdesk` by hand; it removes the password prompt, not a
+// permission boundary. Narrow on purpose -- a rule matching the bare action id
+// would hand deck passwordless control of every unit on the system.
+polkit.addRule(function (action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        subject.user === "deck") {
+        var unit = action.lookup("unit");
+        var verb = action.lookup("verb");
+        if (unit === "rustdesk.service" &&
+            (verb === "start" || verb === "stop" || verb === "restart")) {
+            return polkit.Result.YES;
+        }
+    }
+});

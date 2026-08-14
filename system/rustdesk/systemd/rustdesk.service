@@ -14,11 +14,29 @@ Requires=network.target
 Wants=network-online.target
 After=systemd-user-sessions.service NetworkManager.service network-online.target firewalld.service
 
-[Install]
-WantedBy=multi-user.target
+# No [Install] section, deliberately. This unit must never start at boot: in
+# Game Mode RustDesk cannot capture anything and burns 80% of a core probing for
+# a session it will never find (measured 2026-08-14 -- see bin/rustdesk-in-
+# desktop-mode for the numbers and the mechanism). It is started by
+# rustdesk-desktop-mode.service, a *user* unit wanted by plasma-workspace.target,
+# so it comes up with Desktop Mode and stops with it.
+#
+# Removing [Install] rather than just leaving the unit disabled is the point:
+# `systemctl enable rustdesk` now fails loudly instead of quietly reinstating
+# the boot-time start that this subsystem exists to prevent.
 
 [Service]
 Type=simple
+
+# The Game Mode gate. A failing ExecCondition marks the unit skipped rather
+# than failed, so a stray start costs one exec and no journal noise -- and,
+# importantly, does not trip Restart=on-failure below.
+#
+# This is the backstop, not the gate: the user unit above is what ties the
+# lifetime to Desktop Mode. This catches a manual `systemctl start rustdesk`
+# typed in Game Mode, and the window during a mode switch where the user
+# manager has queued the start but the Plasma session is already going away.
+ExecCondition=/home/deck/git/steam-machine/system/rustdesk/bin/rustdesk-in-desktop-mode
 # Ordering above is necessary but not sufficient -- IPv6 RA can arrive after
 # network-online.target is reached. Combined with the bounded wait in --boot,
 # this turns a lost race into a delay rather than a dead service until reboot.
@@ -33,6 +51,12 @@ RestartSec=10s
 #
 # It must NOT be prefixed with `-`: if the binary could not be restored there is
 # nothing to run, and failing loudly here beats a confusing ExecStart error.
+#
+# Since the Game Mode gate above, this runs on entry to Desktop Mode rather than
+# at boot. That is strictly better: the restore happens at the only moment the
+# binary is about to be used, instead of on every boot into a mode that cannot
+# use it. It also means a first Desktop Mode entry after an OS update costs the
+# extract -- hence --no-block on the user unit's ExecStart.
 ExecStartPre=/home/deck/git/steam-machine/system/rustdesk/install.sh --boot
 
 # --service is the root supervisor. It does not capture anything itself: it
