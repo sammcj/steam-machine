@@ -91,8 +91,31 @@ menuentry 'SteamOS -- 4K120 HDMI (mainline kernel, fallback initramfs)' --class 
 # `ttm: unknown parameter 'pages_min' ignored` for it. Harmless either way, but
 # an ignored parameter in a boot line is a trap for whoever debugs this next.
 # Check `dmesg | grep 'unknown parameter'` after any future rebase.
-if [ -z "${boot_once}" ]; then
-  set default="@MENU_ID@"
+# Only default to the FRL entry if the kernel it names is actually there, on a
+# filesystem GRUB can actually find.
+#
+# Added 2026-08-28, after a SteamOS update landed the machine on the other A/B
+# slot: this file survived with the OLD slot's rootfs UUID, so `search` found no
+# device, the entry could not load its kernel, and GRUB stopped at
+# "Failed to boot both default and fallback entries. Press any key to continue"
+# -- an outage on a machine whose only console is a TV. `fallback` did not save
+# it, so do not rely on it: probe first, and simply do not claim the default
+# when the entry cannot work. A stale or half-installed FRL install then boots
+# stock SteamOS silently, and the next boot's self-heal repairs it.
+#
+# Both files are checked with -s rather than -e: an interrupted install (a
+# rootfs that went read-only mid-extraction, a full /boot) leaves a truncated
+# or zero-length image, which -e would happily accept.
+set frlroot=
+search --no-floppy --fs-uuid --set=frlroot @UUID@
+if [ -n "${frlroot}" ]; then
+  if [ -s ($frlroot)/boot/frl/vmlinuz-linux-frlprobe ]; then
+    if [ -s ($frlroot)/boot/frl/initramfs-linux-frlprobe.img ]; then
+      if [ -z "${boot_once}" ]; then
+        set default="@MENU_ID@"
+      fi
+    fi
+  fi
 fi
 
 # If the default entry cannot be loaded -- kernel file missing after a partial

@@ -1,0 +1,44 @@
+[Unit]
+Description=tmux server, outside any SSH login session scope
+Documentation=file:///home/deck/git/steam-machine/system/tmux/README.md
+# SteamOS ships /etc/systemd/logind.conf.d/killuserprocesses.conf from the
+# jupiter-legacy-support package with KillUserProcesses=True. A tmux server
+# started straight from an SSH shell therefore lives in that login's
+# session-N.scope, and logind kills the entire scope the moment the connection
+# drops -- which, from a phone, is every time the screen sleeps. The sessions
+# are not detached, they are gone.
+#
+# Started as a unit of user@1000.service, the server lands in
+# user-1000.slice/user@1000.service/app.slice/steam-machine-tmux.service
+# instead, where no session scope can take it down with it.
+#
+# No After=/Wants= on graphical-session.target on purpose: the unit is started
+# on demand by the `tmux` shell wrapper, never at boot, so by the time it runs
+# the Plasma session has already pushed DISPLAY, WAYLAND_DISPLAY, XAUTHORITY
+# and DBUS_SESSION_BUS_ADDRESS into the user manager environment. The server
+# inherits them, which is what keeps `SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A`
+# working inside tmux. Enabling this unit would break exactly that: at boot it
+# would start before Plasma, with none of those set, and every askpass dialog
+# in every future pane would fail with a bare "a password is required".
+
+[Service]
+Type=forking
+# tmux double-forks and reparents the server to init, so systemd cannot follow
+# it. Without this, systemd guesses a main PID, guesses wrong, and reports the
+# unit inactive while the server is running. Liveness comes from the cgroup
+# being non-empty instead, which is exactly right here.
+GuessMainPID=no
+ExecStart=/usr/bin/tmux new-session -d -s main
+ExecStop=/usr/bin/tmux kill-server
+TimeoutStopSec=10
+# Deliberately not Restart=on-failure. The unit going inactive means the last
+# session was killed -- an intentional `tmux kill-server`, usually -- and
+# resurrecting an empty `main` session behind the user's back is worse than
+# letting the next `tmux` start it again.
+Restart=no
+
+[Install]
+# Present so `systemctl --user enable` is possible, NOT because it should be
+# enabled. See the environment note above: this unit is meant to be started on
+# demand. If it is ever enabled, expect askpass to stop working in tmux.
+WantedBy=default.target

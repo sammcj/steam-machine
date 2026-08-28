@@ -257,7 +257,27 @@ An earlier version instead installed into `/boot/` and pinned `GRUB_DEFAULT` to 
 set fallback="gnulinux-simple-<rootfs-uuid> 0"
 ```
 
-By id first, since `10_linux` names the top-level SteamOS entry after the rootfs UUID; by index `0` as a backstop if a future `grub.cfg` drops the id. Any failure to load the FRL entry now boots the stock kernel automatically.
+By id first, since `10_linux` names the top-level SteamOS entry after the rootfs UUID; by index `0` as a backstop if a future `grub.cfg` drops the id.
+
+**5. `set default` is guarded by a probe, because `set fallback` was not enough.** Point 4 was tested by deleting the kernel and it worked - but it does not cover the case that actually happened on 2026-08-28. A SteamOS update landed the machine on the other A/B slot, `custom.cfg` survived with the *previous* slot's rootfs UUID, and the `fallback` id is built from that same stale UUID. So `search` found no device, the entry could not load its kernel, the fallback entry did not exist either, and GRUB stopped at *"Failed to boot both default and fallback entries. Press any key to continue"* - the exact outage point 4 exists to prevent.
+
+The fix is to not claim the default unless the entry can actually work:
+
+```
+set frlroot=
+search --no-floppy --fs-uuid --set=frlroot <rootfs-uuid>
+if [ -n "${frlroot}" ]; then
+  if [ -s ($frlroot)/boot/frl/vmlinuz-linux-frlprobe ]; then
+    if [ -s ($frlroot)/boot/frl/initramfs-linux-frlprobe.img ]; then
+      if [ -z "${boot_once}" ]; then
+        set default="frl-probe"
+      fi
+    fi
+  fi
+fi
+```
+
+`-s` rather than `-e`: an interrupted install - a rootfs that went read-only mid-extraction, a full `/boot` - leaves a truncated or zero-length image, which `-e` accepts. A stale or half-installed FRL install now boots stock SteamOS silently, with the menu still there to pick the FRL entry by hand, and the next boot's self-heal repairs it. `fallback` stays as a second line of defence, but nothing depends on it any more.
 
 The uninstall path is ordered to match: the menu entry is removed *before* the kernel it points at, and the "is the stock kernel still in `grub.cfg`?" check runs before anything is deleted rather than after.
 
@@ -512,7 +532,18 @@ So the chain is:
 
 You lose the FRL kernel for exactly one boot after an update. Making that zero would mean writing to the *inactive* slot before the swap, which is far more machinery than the problem deserves.
 
-`install.sh --boot` checks every component independently and exits in about 20 ms when they are all present, so it costs nothing on a normal boot. The unit is `Type=oneshot` with `SuccessExitStatus=0 1`, so a failure can never block boot - the machine is on the stock kernel at that point and is perfectly usable without this.
+`install.sh --boot` checks every component independently and exits in about 20 ms when they are all present, so it costs nothing on a normal boot. The unit is `Type=oneshot` and nothing it does can block boot - the machine is on the stock kernel at that point and is perfectly usable without this. A failure is left visible in `systemctl status` on purpose; there is no `SuccessExitStatus` override to paper over it.
+
+**Step 3 has to serialise against every other subsystem's self-heal.** All thirteen `install.sh --boot` units are wanted by `multi-user.target`, so systemd starts them in the same second, and several of them unlock the rootfs, write to `/usr`, and relock on the way out. `steamos-readonly` is one piece of global state with no ownership, and on 2026-08-28 that cost the kernel exactly what this section promises:
+
+```
+17:51:28  kernel   `steamos-readonly status` -> disabled (a sibling had already unlocked),
+                   so it unlocked nothing itself and began extracting.
+17:51:28  sibling  finished, ran `steamos-readonly enable`.
+17:51:28  kernel   tar: usr/lib/modules/...: Cannot mkdir: Read-only file system
+```
+
+The restore died mid-`tar` with a `vmlinuz` in place and no modules, no initramfs, and `custom.cfg` never reached - which is how the stale-UUID boot entry above survived to be booted. `unlock_rootfs`/`relock_rootfs` now come from [`lib/rootfs.sh`](../../lib/rootfs.sh), which holds one exclusive `flock` on `/run/steam-machine-rootfs.lock` from *before* the status check until after the relock, so whoever holds it owns the read-only state for the whole of its critical section. A failed extraction also cleans up after itself now, rather than leaving the half-install that GRUB then tried to boot.
 
 ### After a SteamOS update
 

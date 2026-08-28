@@ -26,7 +26,7 @@ _lib() {
     done
     return 1
 }
-_l=$(_lib) && source "$_l"
+_l=$(_lib) && source "$_l" && source "${_l%/*}/rootfs.sh"
 
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,22 +51,10 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # need_root() now comes from lib/elevate.sh -- it elevates before dying.
 # --- SteamOS read-only rootfs -------------------------------------------------
-RO_WAS_ENABLED=0
-unlock_rootfs() {
-    if command -v steamos-readonly >/dev/null 2>&1; then
-        if [[ "$(steamos-readonly status 2>/dev/null)" == "enabled" ]]; then
-            RO_WAS_ENABLED=1
-            log "unlocking read-only rootfs"
-            steamos-readonly disable
-        fi
-    fi
-}
-relock_rootfs() {
-    if [[ $RO_WAS_ENABLED -eq 1 ]] && command -v steamos-readonly >/dev/null 2>&1; then
-        log "restoring read-only rootfs"
-        steamos-readonly enable || warn "could not re-enable read-only rootfs"
-    fi
-}
+# unlock_rootfs / relock_rootfs come from lib/rootfs.sh. They hold a repo-wide
+# flock for the whole unlock..relock window: steamos-readonly is global state,
+# and every subsystem's --boot unit starts in the same second, so without it one
+# unit's relock lands in the middle of another's writes. See lib/rootfs.sh.
 
 # --- helpers ------------------------------------------------------------------
 # NB: not `lsmod | grep -q` -- under `set -o pipefail`, grep -q exits on the

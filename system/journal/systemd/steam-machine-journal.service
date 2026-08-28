@@ -1,0 +1,30 @@
+[Unit]
+Description=Restore journald retention settings after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/system/journal/README.md
+# Root half of this subsystem. Two jobs, and as in system/power/ the second is
+# the one that matters:
+#
+#   1. Put /etc/systemd/journald.conf.d/zz-steam-machine-journal.conf back if an
+#      A/B update dropped it (nothing under /etc/systemd/journald.conf.d is on
+#      the SteamOS keep list).
+#   2. Make it take effect *on this boot*.
+#
+# (2) is not redundant with (1). systemd-journald is one of the first processes
+# on the system -- it is running long before any unit of ours can be, and it
+# reads its configuration exactly once, at start. So on the boot after an update
+# that ate the file, restoring the file alone would leave journald running with
+# Valve's 50M cap until the next reboot, quietly vacuuming the very window
+# someone would later go looking for.
+#
+# journald has no reload verb, so --boot restarts it, and only when the file
+# actually changed -- see the comment on apply_journald() in install.sh.
+After=local-fs.target systemd-journald.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/system/journal/install.sh --boot
+# Config-only subsystem -- must never block boot.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,189 +1,63 @@
-# Sleep / keep-awake
+# Sleep / keep-awake — REMOVED
 
-Stops the machine suspending out from under a remote session.
+This subsystem held a logind `block` inhibitor on `sleep` while any SSH session existed, so the machine could not suspend out from under a remote shell. It was removed on 2026-08-18 because it did not delay suspends, it **cancelled** them — and it wedged the Steam client while doing so.
 
-## The problem
+Only `install.sh --uninstall` and `--status` remain, to clean up a machine that still has the old files in `/etc`.
 
-The machine suspends while being worked on over SSH. Confirmed from the journal:
+## What it broke
 
-```
-Aug 02 20:20:59 steammachine systemd-logind[1608]: The system will suspend now!
-Aug 02 20:20:59 steammachine systemd[1]: Starting System Suspend...
-Aug 02 20:20:59 steammachine kernel: PM: suspend entry (deep)
-```
+Reported as: "came back to the machine after a day, Steam's UI is blank, can't see the library". Restarting the Steam client fixed it. It had happened at least twice.
 
-**It is not systemd idle.** `logind.conf` sets no `IdleAction` (the only drop-ins
-are `KillUserProcesses=True` and `HandlePowerKey=ignore`), so logind's own idle
-machinery is inert. The request comes over D-Bus from Steam — the Deck UI's
-*Settings → Power → Sleep after inactivity*. Steam has no idea an SSH session
-exists, because an SSH session is not user activity as far as gamescope is
-concerned.
-
-That it goes **through logind** is what makes it fixable: logind refuses to
-suspend while a `block` inhibitor on `sleep` is held.
-
-## Why this needs root, and why the polkit rule exists
-
-The obvious fix does not work from a remote shell:
+The blank library is Steam stuck **half-way through a suspend that never happened**.
 
 ```
-$ systemd-inhibit --what=sleep --mode=block --who=ssh --why="remote session" -- sleep 2h
-Failed to inhibit: Interactive authentication required.
-
-$ busctl call org.freedesktop.login1 /org/freedesktop/login1 \
-      org.freedesktop.login1.Manager CanSuspend
-s "challenge"
+2026-08-17 17:42:58  keepawake takes a block inhibitor on sleep (1 ssh session)
+2026-08-17 18:13:56  steam: org.freedesktop.DBus.Error.AccessDenied:
+                     Access denied due to active block inhibitor
+2026-08-17 18:21:59  inhibitor released (grace expired)
+   ... 24 hours awake, no further suspend attempt ...
+2026-08-18 11:44:46  SteamUI: INFO:    SuspendResume: Received suspend request
+2026-08-18 11:44:46  SteamUI: WARNING: SuspendResume: Ignoring suspend request
+                     while a suspend operation is in progress: 1
 ```
 
-systemd's shipped policy for `org.freedesktop.login1.inhibit-block-sleep` is
-`allow_any=auth_admin_keep`, `allow_active=yes`, `allow_inactive=yes`. An SSH
-session is neither *active* nor *inactive* to polkit — those describe sessions
-attached to a local seat — so it falls through to `allow_any` and gets a
-password prompt. With no TTY that prompt cannot be answered and the command
-simply hangs.
+That last pair is the whole fault. Steam sets an internal "suspend in progress" flag, tears its UI down ready for the suspend, then calls `org.freedesktop.login1.Manager.Suspend`. logind refuses. **Steam does not unwind.** The flag stays set, the UI stays torn down, and every later suspend request is ignored because a suspend is, as far as the client is concerned, still in progress. Nothing clears it but restarting the client.
 
-(`--what=idle` alone *is* permitted, matching `inhibit-block-idle`'s
-`allow_any=yes` upstream. It is also useless here, since `IdleAction` is unset.)
+Three observations that only fit this explanation, and rule out the alternatives:
 
-Two consequences, and this subsystem uses both:
+- **The connection stays perfectly healthy.** `connection_log.txt` shows an unbroken hourly heartbeat straight through, and there is **no** `CCMInterface::OnSystemPowerStateSuspend` at 18:13:56 — every real suspend in the log has one, immediately followed by a matching `...Resume`. The refusal happens before the networking layer is ever told, which is why the client stays logged on while its UI is dead.
+- **Library and store fail together.** Both are CEF web views; the rest of the client responds.
+- **It is not a resume failure, because there was no resume.** `journalctl -b -k | grep -c "PM: suspend"` returned **0** against three days of uptime. The TV goes off via CEC and the machine never sleeps.
 
-- The **automatic daemon runs as root**, where systemd short-circuits polkit
-  entirely (caller uid == logind's uid), so it never touches this rule.
-- The **manual `keepawake` function runs as `deck`**, so it needs
-  `60-steam-machine-inhibit.rules` to grant that one action.
+`steamui.txt` carries `SteamUI thread frame stalled for: 43646463 ms` entries and they are a **red herring** — they predate this, and the 2026-08-18 restart wrote no new one. They were the first explanation reached for and they were wrong.
 
-## What gets installed
+## Why it could never have worked
 
-| Path | Survives A/B update? |
-|---|---|
-| `/etc/systemd/system/steam-machine-keepawake.service` | yes — default keep list |
-| `/etc/systemd/system/steam-machine-sleep-inhibit.service` | yes — default keep list |
-| `/etc/polkit-1/rules.d/60-steam-machine-inhibit.rules` | **only via** `atomic-update.conf.d` |
-| `/etc/atomic-update.conf.d/steam-machine-sleep.conf` | yes — preserves itself |
-| one `source` line in `~/.bashrc` | yes — `/home` is untouched |
+Steam's idle-suspend is **one-shot**. It asks logind once per idle period and does not retry after a refusal — measured across three days: two refusals, two, and never an unprompted retry in between. A `block` inhibitor therefore does not postpone a suspend for the length of an SSH session, it removes that idle period's only suspend and wedges the client on the way past.
 
-The daemon runs straight out of this repo (`bin/keepawake-daemon`), which lives
-under `/home` and so is never replaced by an OS update.
+The original README argued the design was safe because the request "goes *through* logind, which is what makes it fixable". That is true of the refusal and false of the consequences. It also noted the journal showed "only two suspends in three days" and cut the grace window from two hours to thirty minutes in response — that was this bug, not the grace window, and shortening the window did nothing.
 
-Note the asymmetry that makes the keep entry worth having: if the polkit rule is
-lost, **the automatic path keeps working** (it is root) while the manual
-`keepawake` command starts hanging on a password prompt again. The obvious
-post-update smoke test passes while the thing you reach for by hand does not.
+## What replaced it
 
-## How it works
+Nothing. Steam may now suspend whenever it likes, including during an SSH session.
 
-Two units, deliberately:
+The exposure is smaller than it looks, and smaller than the old design assumed: because the timer is one-shot, a remote session is at risk at a single moment per idle period rather than continuously, and any local input re-arms it. `system/ssh/`'s `ClientAliveInterval 60` / `ClientAliveCountMax 5` still matter and are unaffected — they are what stops a dropped client leaving a session registered with logind for two hours of TCP timeout.
 
-- **`steam-machine-sleep-inhibit.service`** does nothing but
-  `systemd-inhibit … -- sleep infinity`. It is never enabled, only started and
-  stopped on demand.
-- **`steam-machine-keepawake.service`** runs the daemon, which polls logind once
-  a minute and starts/stops the unit above.
-
-Splitting them means *systemd* owns the lifetime of the inhibiting process.
-`systemd-inhibit` holds the lock for exactly as long as its child lives, and
-systemd's default `KillMode=control-group` tears the whole cgroup down on stop.
-A shell script juggling a background PID would orphan the `sleep` — and leak the
-lock — if it were killed at the wrong moment. `ExecStopPost` releases the lock if
-the daemon itself dies.
-
-The daemon holds the lock while **any logind session has `Service=sshd`**, plus
-a grace window (`KEEPAWAKE_WINDOW`, default 1800 s) after the last one ends.
-
-### Why the window is 1800 s and not longer
-
-It was 7200 s (2 h) until 2026-08-03. That was too long, and the cost was not
-obvious from inside this subsystem: the journal showed only **two suspends in
-three days**, because any day with remote work on it kept the machine awake
-essentially permanently — the tail from one session had not expired before the
-next one began. A machine that never suspends wastes more power than every
-tunable in [system/power/](../../system/power/README.md) saves.
-
-1800 s matches Steam's own `IdleSuspendACSeconds`, which is the timer that
-actually fires the suspend this inhibitor blocks. A tail longer than the timer
-it defers is just dead time. It still covers the case the window exists for: a
-dropped Wi-Fi link or a closed laptop lid reconnecting a few minutes later.
-
-### The dependency on ClientAliveInterval
-
-Counting sessions rather than keystrokes is simple and matches the requirement,
-but it has one sharp edge: **a session that never ends holds the machine awake
-forever.** A laptop that closes its lid or drops off Wi-Fi leaves an sshd session
-registered with logind indefinitely.
-
-That is why `system/ssh/` sets `ClientAliveInterval 60` / `ClientAliveCountMax 5`.
-Without it this subsystem pins the machine awake on the first abandoned session,
-and the symptom looks like "the keepawake daemon is broken". The two are a pair.
-
-## Usage
-
-Automatic — nothing to run. Being SSH'd in is enough.
-
-Manual, for a hold that outlives your session (long build, big download):
-
-```bash
-keepawake            # 2h, the default
-keepawake 4h         # any systemd time span: 30m, 90min, 1h30m
-keepawake forever    # no timeout
-keepawake off        # release now
-keepawake status     # what is holding sleep open, and why
-```
-
-`keepawake` uses `systemd-run --user` rather than a backgrounded process on
-purpose: `KillUserProcesses=True` is set, so anything left in the session scope
-is killed on logout — exactly the case a manual hold is for. Parking it in the
-user manager escapes that. `loginctl enable-linger` is not needed because sddm
-autologins `deck` into the Deck UI with `Relogin=true`, so the user manager is
-always running.
-
-## Checking
-
-```bash
-./install.sh --status          # everything, including live inhibitors and sessions
-systemd-inhibit --list         # who=steam-machine-keepawake means it is armed
-systemctl status steam-machine-sleep-inhibit.service
-journalctl -u steam-machine-keepawake -f
-```
-
-To change the grace window, edit `Environment=KEEPAWAKE_WINDOW=` in
-`systemd/steam-machine-keepawake.service` and re-run `./install.sh`.
-
-### `--status` reports two windows, and the difference matters
+If a long unattended remote job genuinely needs protecting, take the lock by hand for the duration and drop it afterwards, rather than leaving a daemon to hold one:
 
 ```
-grace window (config):  1800 seconds after the last SSH session
-grace window (running): 7200 seconds
-[warn] the running daemon still has the OLD window (7200 s, config says 1800 s)
+sudo systemd-inhibit --what=sleep --mode=block --who=me --why="long job" -- <command>
 ```
 
-The installer used to finish with `systemctl enable --now`, and `--now`
-degrades to `start` — a **no-op on an already-active unit**. So editing the
-window and re-running the installer wrote the new unit file, reloaded systemd,
-reported success, and left the old value live in the running process. `--status`
-read the window from the unit file, so it confirmed a change that had not
-happened. Caught on 2026-08-03 on the 7200 → 1800 change.
+That is a deliberate, bounded act with a visible owner in `systemd-inhibit --list`. Note it has exactly the same effect on Steam if a suspend is attempted while it is held — the client will need restarting. There is no configuration that avoids that; it is a Steam bug.
 
-Fixed two ways, because either alone is a single point of failure:
+## Removing the leftovers
 
-- `do_install` now `restart`s rather than `start`s. The lock drops for well under
-  a second — the new process re-acquires on its first loop iteration, before the
-  first poll sleep — and Steam's suspend needs 30 minutes of inactivity, so the
-  gap cannot lose a race.
-- `--status` reports the **running** window alongside the configured one and
-  warns on drift. It reads the value from the `started (window=Ns)` line the
-  daemon logs at startup, filtered to the current `MainPID`. That is the only
-  source that reflects the process rather than the file: `systemctl show -p
-  Environment` re-reads the unit after a `daemon-reload` and would tell the same
-  lie.
+```
+sudo ./install.sh --uninstall
+     ./install.sh --status
+```
 
-The general trap is worth remembering for any unit in this repo that carries
-config in `Environment=`: `daemon-reload` makes systemd re-read the file, it does
-not make a running process re-read anything.
+Removes `/etc/systemd/system/steam-machine-{keepawake,sleep-inhibit}.service`, `/etc/polkit-1/rules.d/60-steam-machine-inhibit.rules` and `/etc/atomic-update.conf.d/steam-machine-sleep.conf`, and releases the lock if it is currently held.
 
-## Not done here
-
-Steam's own sleep timer is left alone. Turning it off in *Settings → Power*
-would also solve the problem, but it would solve it for every case — including
-the console genuinely sitting idle on the TV all night, which is the behaviour
-worth keeping. This subsystem suppresses sleep only while someone is actually
-working on the machine.
+`--status` also lists any `block` inhibitor on sleep from any source, since after all this that is the thing worth being able to see at a glance.

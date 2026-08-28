@@ -33,20 +33,26 @@ is logged; the machine simply becomes less locked down than you think it is.
 `ClientAliveInterval 60` / `ClientAliveCountMax 5` — five minutes of unanswered
 keepalives before a session is torn down. Both default to off.
 
-This is not cosmetic. `hardware/sleep/` holds a logind sleep inhibitor for as
-long as *any* sshd session exists, so a session whose client vanished — lid
-closed, Wi-Fi dropped, VPN flapped — would keep the machine awake indefinitely,
-and the fault would present as "the keepawake daemon is broken" rather than
-"there is a zombie session". These settings are what bound that.
+This is not cosmetic, though the original reason for it is gone. `hardware/sleep/`
+used to hold a logind sleep inhibitor for as long as *any* sshd session existed,
+so a session whose client vanished — lid closed, Wi-Fi dropped, VPN flapped —
+would keep the machine awake indefinitely, and the fault would present as "the
+keepawake daemon is broken" rather than "there is a zombie session". That
+subsystem was **removed on 2026-08-18** (it wedged the Steam client; see
+[hardware/sleep/](../../hardware/sleep/README.md)), so a zombie session no longer
+pins the machine awake.
 
-Five minutes is deliberately tolerant: it rides out a brief Wi-Fi drop or a
-router reboot without killing a live session, while still reaping a genuinely
-dead one well inside keepawake's two-hour grace window. It also keeps NAT and
-stateful-firewall mappings warm, which stops idle sessions being blackholed.
+The keepalives still earn their place on their own terms: a session registered
+with logind but backed by no live client is counted by `loginctl`, shows up in
+`who`, and can sit there for up to ~2 h 11 m of TCP retransmission timeout before
+the kernel gives up. Five minutes is deliberately tolerant — it rides out a brief
+Wi-Fi drop or a router reboot without killing a live session, while still reaping
+a genuinely dead one promptly. It also keeps NAT and stateful-firewall mappings
+warm, which stops idle sessions being blackholed.
 
 The trade-off is real: a client that suspends for longer than five minutes loses
-its session. That is the correct outcome for the inhibitor. The right fix for
-long-lived work is `tmux` on this end, not a longer timeout.
+its session. The right fix for long-lived work is `tmux` on this end (see
+[system/tmux/](../tmux/README.md)), not a longer timeout.
 
 ## What gets installed
 

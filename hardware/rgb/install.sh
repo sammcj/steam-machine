@@ -32,7 +32,7 @@ _lib() {
     done
     return 1
 }
-_l=$(_lib) && source "$_l"
+_l=$(_lib) && source "$_l" && source "${_l%/*}/rootfs.sh"
 
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -307,21 +307,10 @@ do_drop_upstream() {
 }
 
 # Only needed by --drop-upstream-rules; /etc needs no unlock.
-RO_WAS_ENABLED=0
-unlock_rootfs() {
-    if command -v steamos-readonly >/dev/null 2>&1 \
-       && [[ "$(steamos-readonly status 2>/dev/null)" == "enabled" ]]; then
-        RO_WAS_ENABLED=1
-        log "unlocking read-only rootfs"
-        steamos-readonly disable
-    fi
-}
-relock_rootfs() {
-    if [[ $RO_WAS_ENABLED -eq 1 ]] && command -v steamos-readonly >/dev/null 2>&1; then
-        log "restoring read-only rootfs"
-        steamos-readonly enable || warn "could not re-enable read-only rootfs"
-    fi
-}
+# unlock_rootfs / relock_rootfs come from lib/rootfs.sh. They hold a repo-wide
+# flock for the whole unlock..relock window: steamos-readonly is global state,
+# and every subsystem's --boot unit starts in the same second, so without it one
+# unit's relock lands in the middle of another's writes. See lib/rootfs.sh.
 
 do_uninstall() {
     need_root --uninstall

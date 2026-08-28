@@ -336,8 +336,9 @@ do_status() {
     # box. The residency table below is the honest answer to that question.
 
     echo
-    echo "sleep inhibitors (a held 'block' on sleep is worth more than every"
-    echo "tunable above -- see hardware/sleep/):"
+    echo "sleep inhibitors (a held 'block' on sleep costs more than every tunable"
+    echo "above saves -- and worse, a refused suspend wedges the Steam client"
+    echo "until it is restarted; see hardware/sleep/):"
     systemd-inhibit --list --no-pager 2>/dev/null \
         | awk 'NR==1 || /block/' | sed 's/^/  /' || echo "  (unavailable)"
 

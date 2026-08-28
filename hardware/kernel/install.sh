@@ -42,7 +42,7 @@ _lib() {
     done
     return 1
 }
-_l=$(_lib) && source "$_l"
+_l=$(_lib) && source "$_l" && source "${_l%/*}/rootfs.sh"
 
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,20 +119,10 @@ custom_cfg_installed() {
 }
 
 # --- SteamOS read-only rootfs -------------------------------------------------
-RO_WAS_ENABLED=0
-unlock_rootfs() {
-    if steamos-readonly status 2>/dev/null | grep -q enabled; then
-        RO_WAS_ENABLED=1
-        log "unlocking read-only rootfs"
-        steamos-readonly disable || die "could not disable steamos-readonly"
-    fi
-}
-relock_rootfs() {
-    if [[ $RO_WAS_ENABLED -eq 1 ]]; then
-        log "restoring read-only rootfs"
-        steamos-readonly enable || warn "could not re-enable steamos-readonly"
-    fi
-}
+# unlock_rootfs / relock_rootfs come from lib/rootfs.sh. They hold a repo-wide
+# flock for the whole unlock..relock window: steamos-readonly is global state,
+# and every subsystem's --boot unit starts in the same second, so without it one
+# unit's relock lands in the middle of another's writes. See lib/rootfs.sh.
 
 # --- cache --------------------------------------------------------------------
 
@@ -185,8 +175,16 @@ deploy_kernel() {
     # that window left a vmlinuz in /boot proper, which 10_linux globs into
     # grub.cfg -- with no matching initramfs, and version-sorted above the stock
     # kernel. /boot itself is never written to now.
-    tar -C / --zstd -xf "$CACHE_DIR/kernel.tar.zst" \
-        --transform 's|^boot/|boot/frl/|' boot usr
+    # A failed extraction is cleaned up rather than left half-done. The 2026-08-28
+    # case was a sibling boot unit re-enabling steamos-readonly mid-tar, which
+    # left a vmlinuz with no modules and no initramfs -- enough for GRUB to try
+    # the entry and fail. /boot/frl goes back to empty so the next attempt starts
+    # clean, and so custom.cfg's -s guard sees nothing to boot.
+    if ! tar -C / --zstd -xf "$CACHE_DIR/kernel.tar.zst" \
+        --transform 's|^boot/|boot/frl/|' boot usr; then
+        rm -rf "$BOOT_SUBDIR" "/usr/lib/modules/$kver"
+        die "extracting $CACHE_DIR/kernel.tar.zst failed (read-only rootfs? full /boot?) -- nothing installed"
+    fi
     depmod "$kver"
 }
 
@@ -407,7 +405,14 @@ do_status() {
     # built? If so it is NOT protected: a SteamOS update restores the tarball
     # and silently drops it. This caught the hand-installed hid-steam backport.
     if [[ -n ${kver:-} && -d "/usr/lib/modules/$kver" && -f "$CACHE_DIR/kernel.tar.zst" ]]; then
-        newest="$(find "/usr/lib/modules/$kver" -newer "$CACHE_DIR/kernel.tar.zst" -type f -printf '%P\n' 2>/dev/null | head -3)"
+        # depmod rewrites modules.dep/.alias/.symbols and friends on every
+        # restore, so they are ALWAYS newer than the tarball and made this check
+        # cry wolf immediately after a self-heal. They are generated, not
+        # content: dropping them leaves the case worth warning about, a .ko
+        # installed by hand under kernel/ or updates/. `|| true` because
+        # `set -o pipefail` turns grep's "no lines" into a failed assignment.
+        newest="$(find "/usr/lib/modules/$kver" -newer "$CACHE_DIR/kernel.tar.zst" -type f -printf '%P\n' 2>/dev/null \
+            | grep -v '^modules\.' | head -3)" || true
         if [[ -n $newest ]]; then
             echo "cache freshness    : STALE -- modules changed since the cache was built."
             echo "                     These would be LOST at the next OS update:"

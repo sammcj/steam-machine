@@ -97,19 +97,54 @@ for o in objs:
         printf 'live:     suspend-timeout = %s -- NOT applied, restart wireplumber\n' "$live"
     fi
 
-    # The dongle is a high-speed device. Full speed means enumeration failed and
-    # the USB core retried at a lower speed -- see README.md.
-    local d speed
-    for d in /sys/bus/usb/devices/1-*/; do
+    # Link speed only means something once you know which controller it is on:
+    # 12 Mbps on 11:00.4 is a clean full-speed negotiation, 12 Mbps on 0f:00.0 is
+    # the retry after a failed high-speed attempt. See README.md. Globbing every
+    # bus, not just bus 1 -- the intended rear port enumerates on bus 5.
+    local d speed ctrl card range dongle="" found=0
+    for d in /sys/bus/usb/devices/*/; do
         [[ -f $d/product ]] || continue
         grep -qi stealth "$d/product" 2>/dev/null || continue
+        found=1
+        dongle="$d"
         speed="$(cat "$d/speed" 2>/dev/null)"
-        if [[ $speed == 480 ]]; then
-            printf 'usb:      %s at %s Mbps (high speed, correct)\n' "$(basename "$d")" "$speed"
-        else
-            printf 'usb:      %s at %s Mbps -- expected 480, re-seat the dongle\n' "$(basename "$d")" "$speed"
-        fi
+        # Last PCI address on the sysfs path is the xHCI controller.
+        ctrl="$(readlink -f "$d" | grep -o '0000:[0-9a-f]\{2\}:[0-9a-f]\{2\}\.[0-9]' | tail -1)"
+        case "$ctrl" in
+            0000:11:00.4)
+                printf 'usb:      %s at %s Mbps on %s (rear, isolated -- correct)\n' \
+                    "$(basename "$d")" "$speed" "$ctrl" ;;
+            0000:0f:00.0)
+                printf 'usb:      %s at %s Mbps on %s -- SHARED with the input devices;\n' \
+                    "$(basename "$d")" "$speed" "$ctrl"
+                printf '          move it to a rear port on 11:00.4 (see README.md)\n' ;;
+            *)
+                printf 'usb:      %s at %s Mbps on %s (unexpected controller)\n' \
+                    "$(basename "$d")" "$speed" "$ctrl" ;;
+        esac
     done
+
+    if [[ $found -eq 0 ]]; then
+        printf 'usb:      dongle not on the bus -- if just plugged in, wait 3 min before\n'
+        printf '          re-seating; recovery takes ~2m45s (README.md)\n'
+        return 0
+    fi
+
+    # A one-step volume range means control transfers are still timing out, i.e.
+    # the device is mid-recovery rather than settled. Healthy is 0 - 74.
+    card="$(basename "$(ls -d /sys/bus/usb/devices/*/*/sound/card* 2>/dev/null \
+        | grep -F "$(basename "$dongle")/" | head -1)" 2>/dev/null || true)"
+    card="${card#card}"
+    if [[ -n $card ]]; then
+        range="$(amixer -c "$card" 2>/dev/null | sed -n 's/.*Limits: Playback \([0-9]* - [0-9]*\).*/\1/p' | head -1)"
+        if [[ -z $range ]]; then
+            printf 'mixer:    no PCM playback control found on card %s\n' "$card"
+        elif [[ $range == "0 - 74" ]]; then
+            printf 'mixer:    card %s range %s (healthy)\n' "$card" "$range"
+        else
+            printf 'mixer:    card %s range %s -- collapsed, device still recovering\n' "$card" "$range"
+        fi
+    fi
 }
 
 case "${1:-}" in

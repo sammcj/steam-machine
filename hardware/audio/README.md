@@ -64,7 +64,7 @@ The `-110` (`ETIMEDOUT`) transfers are the dongle failing to answer while its 2.
 
 Full speed is not a bandwidth problem for this stream, either: 48 kHz stereo 24-bit out is 288 bytes/ms and the mono 16-bit mic in is 96 bytes/ms, against roughly 1023 bytes/ms available to a full-speed endpoint. The reason to get back to 480 Mbps is that it indicates a clean enumeration, not that 12 Mbps starves the audio.
 
-`install.sh --status` reports the current link speed for this reason. If it says anything other than 480, re-seat the dongle **with the headset powered off**, so the link is not being negotiated while the kernel is trying to enumerate.
+`install.sh --status` reports the current link speed for this reason. Read it against the controller, not against 480 — see [Link speed follows the controller](#link-speed-follows-the-controller-not-the-hot-plug) below: 12 Mbps on `11:00.4` is clean, 12 Mbps on `0f:00.0` is a failed retry. When it is a failed retry, re-seat the dongle **with the headset powered off**, so the link is not being negotiated while the kernel is trying to enumerate.
 
 ## It takes the controller with it
 
@@ -99,6 +99,73 @@ Since full speed does not starve this stream (see above), the live trade-off is:
 - **`0f:00.0` at 480 Mbps** — back on the same controller as the Steam Controller, Logitech receiver and ITE device, where a 90 s stall takes them all down.
 
 Isolation is worth more than a link speed that is not a bottleneck, so it stays on `11:00.4`. Revisit only if full speed turns out to cost something measurable — its 1 ms frames rather than 125 µs microframes mean slightly coarser isochronous scheduling, which is a latency argument, not a dropout one.
+
+## Recovery takes about three minutes, and re-plugging restarts the clock
+
+2026-08-22. The dongle was moved to a front port and appeared dead — no LED, nothing in `lsusb`, no card in `/proc/asound/cards`. It was not dead. It was mid-recovery, and every re-plug restarted that recovery from zero.
+
+```
+16:13:30  usb 1-3: USB disconnect, device number 3           <- pulled from the rear port
+16:16:18  usb 1-4: new full-speed USB device number 6        <- 0e8d:0003, the firmware loader
+16:16:18  usb 1-4: USB disconnect, device number 6
+16:16:19  usb 1-4: new high-speed USB device number 7        <- 10f5:2242, attempt 1
+16:17:36  usbhid 1-4:1.3: can't add hid device: -71
+16:17:36  usb 1-4: USB disconnect, device number 7
+16:17:37  usb 1-4: new high-speed USB device number 8        <- attempt 2
+16:19:04  usbhid 1-4:1.3: can't add hid device: -110
+16:19:04  usb 1-4: USB disconnect, device number 8
+16:19:05  usb 1-4: new full-speed USB device number 9        <- attempt 3, works
+```
+
+It enumerates twice on arrival: first as `0e8d:0003` (a MediaTek loader), which drops off within a second and comes back as `10f5:2242`. That pair is normal and is not a failure.
+
+What follows is: two full high-speed attempts failed before the full-speed retry stuck. **2 min 46 s from first plug to working audio**, at roughly 90 s per attempt — the `-110` storm described above.
+
+Nothing in that window looks like progress. The LED stays dark *between* attempts, not just during them, so the natural reading is "the dongle is dead" and the natural response is to re-plug — which discards the attempt in flight and starts another 90 s. Three re-plugs is nine minutes of a device that was going to fix itself in three.
+
+**After plugging this dongle in, wait three minutes before touching it.** Watch instead of re-plugging:
+
+```
+journalctl -k -f | rg 'usb 1-|usb 5-'
+```
+
+Powering the headset off before re-seating still avoids the storms entirely and remains the better move. But once it is already plugged in with the headset on, waiting is the fix.
+
+### The mixer looks broken while it is recovering
+
+Worth recording because it reinforces the wrong conclusion. During a failed attempt the driver cannot read the volume range, and falls back to a single step:
+
+```
+usb 1-4: 2:0: cannot get min/max values for control 2 (id 2)
+usb 1-4: Warning! Unlikely small volume range (=1), linear volume or custom curve?
+usb 1-4: [2] FU [PCM Playback Volume] ch = 1, val = 0/1/1
+```
+
+A healthy enumeration reports `Limits: Playback 0 - 74`. So `amixer -c <n>` showing a one-step range means the device is still mid-recovery — it does not mean the headset's volume control is broken, and it resolves itself when the successful attempt lands.
+
+## The front ports are on the wrong controller
+
+The front-panel ports enumerate as `1-3` and `1-4` on `0f:00.0` — the same controller as the Steam Controller Puck and the ITE device, and precisely the controller [It takes the controller with it](#it-takes-the-controller-with-it) moved the dongle *off*. Convenience is on the front, isolation is on the rear. Keep it on `11:00.4`, which enumerates as `5-2`.
+
+## Untested: quirks that might shorten the recovery
+
+Not applied, and recorded here so they are not re-derived from scratch. All of them target the `-110` control-transfer timeouts, which are what makes each failed attempt cost 90 s rather than a second.
+
+Both parameters are writable at runtime as root, so each can be tried without a reboot — write, then re-seat the dongle:
+
+| Knob | Value | What it does |
+|---|---|---|
+| `/sys/module/usbcore/parameters/quirks` | `10f5:2242:gn` | `g` = `USB_QUIRK_DELAY_INIT`, `n` = `USB_QUIRK_DELAY_CTRL_MSG`. Paces enumeration for devices that cannot answer control requests promptly. |
+| `/sys/module/snd_usb_audio/parameters/quirk_flags` | `0x10f5:0x2242:0x4100` | bit 8 `CTL_MSG_DELAY` (20 ms between control messages) + bit 14 `IGNORE_CTL_ERROR` (do not fail the mixer on a timed-out control request). |
+
+Letter and bit assignments verified against [`drivers/usb/core/quirks.c`](https://github.com/torvalds/linux/blob/master/drivers/usb/core/quirks.c) and [`sound/usb/usbaudio.h`](https://github.com/torvalds/linux/blob/master/sound/usb/usbaudio.h) rather than from memory — several widely-copied blog values are wrong.
+
+Caveats before spending time on these:
+
+- `usbcore` is **built in** on this kernel, not a module, so `/etc/modprobe.d` will not work for it. A permanent setting needs `usbcore.quirks=` on the kernel cmdline via a new `/etc/default/grub.d/*.cfg` — never by editing Valve's `grub-steamos`.
+- `snd_usb_audio` *is* a module, so it can use `/etc/modprobe.d` — which is **not** on the atomic-update allowlist and needs both a keep entry and a boot self-heal.
+- The `-110` timeouts come from the dongle not answering while its 2.4 GHz link is down. Delays and ignored errors may only make the driver more patient about a wait that still has to happen. Measure the recovery time before and after; do not assume.
+- Powering the headset off before re-seating already avoids the storms, at zero risk and zero config. Try these only if that is not good enough.
 
 ## Re-seating resets the default sink
 
