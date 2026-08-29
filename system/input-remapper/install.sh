@@ -184,22 +184,47 @@ install_gtksourceview() {
     rm -rf "$tmp"
 }
 
+# Built BESIDE the live venv and swapped in only once it imports, never on top
+# of it. The rebuild path runs on the first boot after a SteamOS python bump --
+# which is also the first boot after an A/B update, with pip racing
+# NetworkManager for a route. Deleting the working tree first and then failing
+# to fetch a wheel would leave the machine with no venv at all, which is
+# strictly worse than the stale one it started with.
 build_venv() {
+    local new="$VENV_DIR.new" old="$VENV_DIR.old"
+    rm -rf "$new"
     log "building venv with $SYS_PYTHON ($("$SYS_PYTHON" -V))"
-    rm -rf "$VENV_DIR"
     # --system-site-packages is what makes this work with nothing compiled:
     # evdev, PyGObject, pycairo and psutil are taken from /usr/lib/python3.N.
-    "$SYS_PYTHON" -m venv --system-site-packages "$VENV_DIR" || die "venv creation failed"
+    "$SYS_PYTHON" -m venv --system-site-packages "$new" || die "venv creation failed"
     log "installing python dependencies"
-    "$VENV_DIR/bin/pip" install --quiet --no-cache-dir --upgrade "${PIP_DEPS[@]}" \
-        || die "pip install failed"
+    "$new/bin/pip" install --quiet --no-cache-dir --upgrade "${PIP_DEPS[@]}" \
+        || die "pip install failed (no network yet?)"
     log "installing input-remapper $UPSTREAM_REF"
     # --no-deps: pyproject lists evdev/PyGObject/pycairo/psutil, and letting pip
     # satisfy those would pull sdists it then has to compile, which is exactly
     # what the system packages exist to avoid.
-    "$VENV_DIR/bin/pip" install --quiet --no-cache-dir --no-deps "$SRC_DIR" \
+    "$new/bin/pip" install --quiet --no-cache-dir --no-deps "$SRC_DIR" \
         || die "installing input-remapper failed"
+
+    venv_imports "$new" || die "the freshly built venv cannot import input-remapper -- keeping the old one"
+
+    rm -rf "$old"
+    [[ -d "$VENV_DIR" ]] && mv "$VENV_DIR" "$old"
+    mv "$new" "$VENV_DIR"
     py_minor > "$PY_MARKER"
+
+    # A venv is not formally relocatable -- the shebangs in bin/ carry the path
+    # it was built at. Nothing here runs those (the wrappers invoke
+    # venv/bin/python directly), but the move is still verified rather than
+    # assumed, with the previous tree kept until it passes.
+    if ! venv_healthy; then
+        warn "the venv does not import after the move -- restoring the previous one"
+        rm -rf "$VENV_DIR"
+        [[ -d "$old" ]] && mv "$old" "$VENV_DIR"
+        die "venv rebuild failed; the previous venv is back in place"
+    fi
+    rm -rf "$old"
 }
 
 install_prefix_data() {
@@ -273,45 +298,68 @@ UNIT
 # on a normal boot nothing has changed and none of them run.
 sync_file() {
     local src="$1" dest="$2" mode="${3:-644}"
-    cmp -s "$src" "$dest" 2>/dev/null && return 1
-    install -Dm"$mode" "$src" "$dest"
+    if cmp -s "$src" "$dest" 2>/dev/null && [[ "$(stat -c '%a %U %G' "$dest" 2>/dev/null)" == "$mode root root" ]]; then
+        return 1
+    fi
+    # Mode and owner are compared, not just content: a dbus policy or udev rule
+    # whose bytes are right but whose mode drifted is exactly the damage this
+    # exists to repair, and cmp alone reports it as fine.
+    install -Dm"$mode" -o root -g root "$src" "$dest" || die "could not write $dest"
     return 0
 }
 
 # The /usr half. Checked before unlocking so the common case (nothing missing)
 # never touches steamos-readonly or takes the repo-wide rootfs lock.
-usr_files_ok() {
-    local b
-    for b in "${BINS[@]}"; do
-        cmp -s "$PREFIX/bin/$b" "/usr/bin/$b" || return 1
-    done
-    [[ "$(readlink -f "$USR_DATA_LINK" 2>/dev/null)" == "$(readlink -f "$DATA_DIR")" ]] || return 1
-    cmp -s "$SRC_DIR/data/input-remapper.policy" "$POLKIT_DEST" || return 1
+usr_file_ok() {
+    local src="$1" dest="$2" mode="$3"
+    cmp -s "$src" "$dest" 2>/dev/null || return 1
+    [[ "$(stat -c '%a %U %G' "$dest" 2>/dev/null)" == "$mode root root" ]] || return 1
     return 0
 }
 
-ensure_usr_files() {
-    usr_files_ok && return 1
+usr_files_ok() {
+    local b
+    for b in "${BINS[@]}"; do
+        usr_file_ok "$PREFIX/bin/$b" "/usr/bin/$b" 755 || return 1
+    done
+    [[ "$(readlink -f "$USR_DATA_LINK" 2>/dev/null)" == "$(readlink -f "$DATA_DIR")" ]] || return 1
+    usr_file_ok "$SRC_DIR/data/input-remapper.policy" "$POLKIT_DEST" 644 || return 1
+    return 0
+}
 
-    trap relock_rootfs EXIT
+# Always returns 0. It used to return 1 for "nothing to do", which forced every
+# caller into an `if`/`|| true` context -- and bash disables `set -e` for the
+# whole dynamic extent of a function called that way, so a failed `install` into
+# /usr/bin printed "restored" and exited 0. Every write is now checked
+# explicitly instead.
+ensure_usr_files() {
+    usr_files_ok && return 0
+
+    # SIGTERM as well as EXIT: bash does not run an EXIT trap when killed, and
+    # this can be waiting on the repo-wide rootfs lock when systemd's
+    # TimeoutStartSec fires -- which would leave the rootfs unlocked for the
+    # rest of the boot.
+    trap relock_rootfs EXIT TERM INT
     unlock_rootfs
     local b
     for b in "${BINS[@]}"; do
-        cmp -s "$PREFIX/bin/$b" "/usr/bin/$b" && continue
-        install -Dm755 "$PREFIX/bin/$b" "/usr/bin/$b"
+        usr_file_ok "$PREFIX/bin/$b" "/usr/bin/$b" 755 && continue
+        install -Dm755 -o root -g root "$PREFIX/bin/$b" "/usr/bin/$b" \
+            || die "could not write /usr/bin/$b"
         warn "restored /usr/bin/$b"
     done
     if [[ "$(readlink -f "$USR_DATA_LINK" 2>/dev/null)" != "$(readlink -f "$DATA_DIR")" ]]; then
         rm -rf "$USR_DATA_LINK"
-        ln -sfn "$DATA_DIR" "$USR_DATA_LINK"
+        ln -sfn "$DATA_DIR" "$USR_DATA_LINK" || die "could not create $USR_DATA_LINK"
         warn "restored $USR_DATA_LINK -> $DATA_DIR"
     fi
-    if ! cmp -s "$SRC_DIR/data/input-remapper.policy" "$POLKIT_DEST"; then
-        install -Dm644 "$SRC_DIR/data/input-remapper.policy" "$POLKIT_DEST"
+    if ! usr_file_ok "$SRC_DIR/data/input-remapper.policy" "$POLKIT_DEST" 644; then
+        install -Dm644 -o root -g root "$SRC_DIR/data/input-remapper.policy" "$POLKIT_DEST" \
+            || die "could not write $POLKIT_DEST"
         warn "restored $POLKIT_DEST"
     fi
     relock_rootfs
-    trap - EXIT
+    trap - EXIT TERM INT
     return 0
 }
 
@@ -359,20 +407,31 @@ install_user_files() {
     install -Dm644 "$SRC_DIR/data/input-remapper-gtk.desktop" "$apps/input-remapper-gtk.desktop"
     install -Dm644 "$SRC_DIR/data/input-remapper.svg" "$icons/input-remapper.svg"
     install -Dm644 "$SRC_DIR/data/input-remapper-autoload.desktop" "$autostart/input-remapper-autoload.desktop"
-    chown -R "$TARGET_USER:$TARGET_USER" "$apps" "$icons" "$autostart" 2>/dev/null || true
+    # The icons ROOT, not the leaf: `install -D` creates hicolor/ and
+    # scalable/ as root on the way down, and chowning only the last directory
+    # leaves them that way.
+    chown -R "$TARGET_USER:$TARGET_USER" \
+        "$apps" "$autostart" "$TARGET_HOME/.local/share/icons" 2>/dev/null || true
     log "installed desktop entry, icon and autoload autostart under $TARGET_HOME"
 }
 
 # --- health -------------------------------------------------------------------
 
-venv_healthy() {
-    [[ -x "$VENV_DIR/bin/python" ]] || return 1
-    [[ -f "$PY_MARKER" && "$(cat "$PY_MARKER")" == "$(py_minor)" ]] || return 1
+# Can input-remapper actually be imported by the interpreter in $1? Split out so
+# a candidate venv can be proven before it replaces the working one.
+venv_imports() {
+    local venv="$1"
+    [[ -x "$venv/bin/python" ]] || return 1
     LD_LIBRARY_PATH="$PREFIX/lib" \
     GI_TYPELIB_PATH="$PREFIX/lib/girepository-1.0" \
     XDG_DATA_DIRS="$PREFIX/share:/usr/share" \
-        "$VENV_DIR/bin/python" -c 'import inputremapper.daemon, inputremapper.gui.user_interface' \
+        "$venv/bin/python" -c 'import inputremapper.daemon, inputremapper.gui.user_interface' \
         >/dev/null 2>&1
+}
+
+venv_healthy() {
+    [[ -f "$PY_MARKER" && "$(cat "$PY_MARKER")" == "$(py_minor)" ]] || return 1
+    venv_imports "$VENV_DIR"
 }
 
 # --- top level ----------------------------------------------------------------
@@ -394,7 +453,7 @@ do_install() {
     venv_healthy || die "the built venv cannot import input-remapper -- refusing to install it"
 
     ensure_etc_files
-    ensure_usr_files >/dev/null || true
+    ensure_usr_files
     install_user_files
 
     systemctl enable steam-machine-input-remapper.service >/dev/null 2>&1 \
@@ -409,23 +468,33 @@ do_install() {
 
 do_boot() {
     need_root --boot
+    [[ -d "$SRC_DIR" ]] || { warn "$SRC_DIR is missing -- run $REPO_DIR/install.sh"; return 0; }
+
+    # ORDER MATTERS. Restoring the system files is cheap, needs no network, and
+    # is the thing an A/B update actually breaks -- so it happens first and
+    # unconditionally. It used to run after the venv check, which meant a failed
+    # rebuild (pip with no route yet, on the first boot after an update) took
+    # the whole self-heal down with it and left /usr/bin, the dbus policy and
+    # the udev rules missing as well as the venv.
+    ensure_etc_files
+    ensure_usr_files
 
     # A python minor bump in a SteamOS update leaves the venv pointing at a
     # site-packages tree that no longer exists. Symptom without this: the daemon
     # starts, fails to import evdev, and the GUI reports nothing at all.
-    if [[ -d "$SRC_DIR" ]] && ! venv_healthy; then
+    #
+    # In a subshell, because the rebuild helpers `die` on failure and by this
+    # point everything else has already been repaired -- a rebuild that cannot
+    # run today is a warning, not a reason to fail the unit.
+    if ! venv_healthy; then
         warn "venv is unhealthy (system python is now $(py_minor)) -- rebuilding"
-        install_gtksourceview
-        build_venv
-        install_prefix_data
-        write_wrappers
-        venv_healthy || warn "rebuild did not fix it -- run $REPO_DIR/install.sh by hand"
+        if ( install_gtksourceview && build_venv && install_prefix_data && write_wrappers ); then
+            venv_healthy || warn "rebuild did not fix it -- run $REPO_DIR/install.sh by hand"
+        else
+            warn "venv rebuild failed (no network yet?) -- the previous venv is untouched;"
+            warn "  run $REPO_DIR/install.sh by hand, or reboot once the network is up"
+        fi
     fi
-
-    [[ -d "$SRC_DIR" ]] || { warn "$SRC_DIR is missing -- run $REPO_DIR/install.sh"; return 0; }
-
-    ensure_etc_files
-    ensure_usr_files >/dev/null || true
     return 0
 }
 

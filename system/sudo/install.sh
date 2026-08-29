@@ -83,7 +83,13 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 # set still parses afterwards. Returns 0 if it wrote something, 1 if there was
 # nothing to do -- so the boot path can skip the reload work.
 install_dropin() {
-    cmp -s "$DROPIN_SRC" "$DROPIN_DEST" && return 1
+    # Mode and owner, not just content: sudo refuses to read the WHOLE set if
+    # any drop-in is group- or world-writable, so a file whose bytes are right
+    # at mode 0664 breaks sudo entirely and `cmp` alone calls it fine.
+    if cmp -s "$DROPIN_SRC" "$DROPIN_DEST" 2>/dev/null \
+       && [[ "$(stat -c '%a %U %G' "$DROPIN_DEST" 2>/dev/null)" == "440 root root" ]]; then
+        return 1
+    fi
 
     visudo -cqf "$DROPIN_SRC" \
         || die "$DROPIN_SRC does not parse -- refusing to install it"
@@ -97,16 +103,30 @@ install_dropin() {
     # Written under a dotted temp name first: sudo ignores files with a dot in
     # the name, so a half-written file in sudoers.d is inert rather than
     # dangerous. The rename into place is atomic.
+    #
+    # Every write is checked. `install_dropin` is called from an `if`, and bash
+    # disables `set -e` for the whole dynamic extent of a function called that
+    # way -- so without these an `install` or `mv` that failed would fall
+    # through, `visudo -cq` would pass against the file still sitting there, and
+    # the run would report "restored" having written nothing.
     local tmp="/etc/sudoers.d/.10-steam-machine.new"
-    install -m440 -o root -g root "$DROPIN_SRC" "$tmp"
-    mv -f "$tmp" "$DROPIN_DEST"
+    install -m440 -o root -g root "$DROPIN_SRC" "$tmp" \
+        || die "could not write $tmp -- nothing changed"
+    mv -f "$tmp" "$DROPIN_DEST" \
+        || { rm -f "$tmp"; die "could not install $DROPIN_DEST -- nothing changed"; }
 
     if ! visudo -cq; then
         warn "the sudoers set does not parse with the new drop-in -- rolling back"
         if [[ -n "$backup" ]]; then
-            cp -a "$backup" "$DROPIN_DEST"; rm -f "$backup"
+            # The one place a silent failure would matter: a rejected sudoers
+            # file left in place is the lockout this whole function exists to
+            # prevent, so say so in the loudest terms available.
+            cp -a "$backup" "$DROPIN_DEST" \
+                || die "COULD NOT ROLL BACK -- delete $DROPIN_DEST from a root shell NOW"
+            rm -f "$backup"
         else
-            rm -f "$DROPIN_DEST"
+            rm -f "$DROPIN_DEST" \
+                || die "COULD NOT REMOVE the rejected $DROPIN_DEST -- delete it from a root shell NOW"
         fi
         die "rolled back; nothing changed"
     fi
@@ -115,8 +135,17 @@ install_dropin() {
 }
 
 ensure_etc_config() {
-    if install_dropin; then
-        warn "restored $DROPIN_DEST (was missing or modified)"
+    # The sudoers write is the only part that needs visudo. The keep entry and
+    # the boot unit are restored regardless -- a missing keep entry is the
+    # silent, permanent failure (the next A/B update then deletes the drop-in
+    # for good, with no unit left to put it back), so skipping it because a
+    # validator is absent would defeat the entire subsystem.
+    if command -v visudo >/dev/null 2>&1; then
+        if install_dropin; then
+            warn "restored $DROPIN_DEST (was missing or modified)"
+        fi
+    else
+        warn "visudo not found -- leaving $DROPIN_DEST alone"
     fi
     if ! cmp -s "$KEEP_SRC" "$KEEP_DEST"; then
         install -Dm644 "$KEEP_SRC" "$KEEP_DEST"
@@ -142,7 +171,6 @@ do_install() {
 
 do_boot() {
     need_root --boot
-    command -v visudo >/dev/null || { warn "visudo not found -- skipping"; return 0; }
     ensure_etc_config
 }
 
@@ -154,10 +182,14 @@ do_boot() {
 # are `Defaults:deck` entries -- so `sudo -V` under root reports the unchanged
 # compiled-in `tty` / 5 minutes and looks exactly like the drop-in having no
 # effect, when it is simply not addressed to root.
+# NOTE the `tr -d`: sudo wraps this list to the TERMINAL width (it reads
+# TIOCGWINSZ, not stdout), so on an 80-column tty the settings spill onto a
+# second physical line and reading only the first reports them as unset --
+# precisely the false negative the README warns about, by a different route.
 deck_defaults() {
     [[ $EUID -eq 0 ]] || { echo "(re-run with sudo to read)"; return; }
     sudo -U "$TARGET_USER" -l 2>/dev/null \
-        | sed -n '/^Matching Defaults entries/,/^$/p' | sed -n '2p' | sed 's/^ *//'
+        | sed -n '/^Matching Defaults entries/,/^$/p' | tail -n +2 | tr -d '\n' | sed 's/^ *//'
 }
 
 deck_default() {

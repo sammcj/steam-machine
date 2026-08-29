@@ -17,15 +17,26 @@ Documentation=file:///home/deck/git/steam-machine/system/input-remapper/README.m
 # is --system-site-packages, so it borrows evdev/PyGObject/cairo from /usr and
 # breaks silently if that tree is renamed).
 After=local-fs.target
-Before=input-remapper.service systemd-user-sessions.service
 Wants=local-fs.target
+# Ordered before the daemon only. NOT before systemd-user-sessions.service:
+# this unit can wait on the repo-wide rootfs lock, and holding up graphical
+# login for that is a black screen on a TV with no explanation, on exactly the
+# boot after an OS update.
+Before=input-remapper.service
+# The venv rebuild wants a route for pip. Best effort -- do_boot restores the
+# system files first and treats a failed rebuild as a warning, so this only
+# improves the odds of the rebuild succeeding on the first try.
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/home/deck/git/steam-machine/system/input-remapper/install.sh --boot
-# A venv rebuild after a python bump downloads nothing but wheels; allow for it.
-TimeoutStartSec=600
+# A venv rebuild after a python bump downloads nothing but wheels; allow for
+# it. Deliberately longer than lib/rootfs.sh's 600s rootfs-lock wait, so a unit
+# that waits out the lock is not then killed while holding it.
+TimeoutStartSec=900
 
 [Install]
 WantedBy=multi-user.target

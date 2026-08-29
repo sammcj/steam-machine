@@ -30,7 +30,7 @@ Nothing is compiled by `install.sh`. There is no `gcc`, no `make` and no `/usr/i
 
 Upstream installs with `python3 -m install --root /`, which writes to `/usr/bin`, `/usr/share`, `/usr/lib/systemd/system`, `/usr/lib/udev/rules.d` and `/etc/xdg/autostart`. [`install/module.py`](https://github.com/sezanzeb/input-remapper/blob/main/install/module.py) goes further and explicitly scores any site-packages path under `/home` at **-50**, on the grounds that udev's python does not import from there. Installed upstream's way this vanishes on the next OS update with no error at all — just a GUI that stops starting.
 
-So the application lives in `/opt/input-remapper`, which is a SteamOS offload mount on the home partition (`findmnt /opt` → `/dev/nvme0n1p8[/.steamos/offload/opt]`): writable without unlocking the rootfs, and untouched by an A/B update. Same reasoning as [system/btop/](../btop/README.md).
+So the application lives in `/opt/input-remapper`, which is a SteamOS offload mount on the home partition (`findmnt /opt` → a source ending `[/.steamos/offload/opt]`; the device node itself moves between A/B slots, so `install.sh` matches on the subpath and never on the device): writable without unlocking the rootfs, and untouched by an A/B update. Same reasoning as [system/btop/](../btop/README.md).
 
 Five things resolve by absolute path from outside our control and could not move:
 
