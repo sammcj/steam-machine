@@ -9,6 +9,9 @@
 #   ./install.sh --uninstall
 #   ./install.sh --cache    save the INSTALLED kernel and modules into the
 #                           cache tarball on /home
+#   ./install.sh --install-build [modules-dir]
+#                           install the kernel sitting in the BUILD TREE, so
+#                           there is something to boot and then --cache
 #
 # About --cache, because getting this wrong is silent: the tarball under /home
 # is the ONLY thing that survives a SteamOS A/B update. --boot restores the
@@ -98,6 +101,19 @@ efi_dir() {
 
 cached_kver() { [[ -f $KVER_FILE ]] && cat "$KVER_FILE"; }
 
+# The version a kernel IMAGE actually is, read out of the bzImage header rather
+# than taken on trust from a path or a preset. This is the only way to catch the
+# drift that broke the 2026-08-28 restore: two different builds can carry the
+# same release string, and a stale cache looks identical to a fresh one from
+# every other angle.
+kver_of_image() {
+    local out
+    out="$(file -b "$1" 2>/dev/null)" || return 1
+    [[ $out == *"bzImage, version "* ]] || return 1
+    out=${out#*bzImage, version }
+    printf '%s\n' "${out%% *}"
+}
+
 # --- state --------------------------------------------------------------------
 
 kernel_installed() {
@@ -128,17 +144,38 @@ custom_cfg_installed() {
 
 # Packs the built kernel into a single tarball under /home. This is what makes
 # reinstalling after an A/B update cheap: no rebuild, no container, no network.
+# Packs the INSTALLED kernel and the INSTALLED modules -- the pair that has
+# actually booted -- never the build tree's bzImage.
+#
+# It used to take the image from $BUILD_TREE/arch/x86/boot/bzImage while taking
+# the modules from /usr/lib/modules, and on 2026-08-28 that cost the machine its
+# kernel. The build tree had been rebuilt (the pstore config change) without the
+# result ever being installed, so `--cache` packed an 8 Aug bzImage next to 6 Aug
+# modules. CONFIG_LOCALVERSION makes every build report the same release string,
+# so nothing downstream could tell: --status said the cache was current, the
+# restore after the SteamOS update deployed the mismatched pair, and it hung at
+# the splash with no journal.
+#
+# So the version now comes out of the image header, and the build tree is only
+# consulted to warn that it has moved ahead of what is installed.
 build_cache() {
     need_root
-    [[ -d $BUILD_TREE ]] || die "no build tree at $BUILD_TREE (set FRL_BUILD_TREE)"
+
+    local img="$BOOT_SUBDIR/vmlinuz-linux-frlprobe"
+    [[ -f $img ]] || die "no installed kernel at $img -- run a full install first"
 
     local kver
-    kver="$(cat "$BUILD_TREE/include/config/kernel.release" 2>/dev/null)" \
-        || die "cannot read kernel.release from $BUILD_TREE"
-    [[ -n $kver ]] || die "empty kernel version from $BUILD_TREE"
+    kver="$(kver_of_image "$img")" || die "cannot read the kernel version out of $img"
+    [[ -n $kver ]] || die "empty kernel version from $img"
 
     [[ -d "/usr/lib/modules/$kver" ]] \
         || die "modules for $kver are not installed; run a full install first"
+
+    if [[ -f "$BUILD_TREE/arch/x86/boot/bzImage" ]] \
+       && ! cmp -s "$BUILD_TREE/arch/x86/boot/bzImage" "$img"; then
+        warn "the build tree holds $(kver_of_image "$BUILD_TREE/arch/x86/boot/bzImage" || echo '?') and it is NOT what is installed ($kver)"
+        warn "caching the installed kernel. Install the build first if that is the one you want cached."
+    fi
 
     log "packing $kver into the cache"
     mkdir -p "$CACHE_DIR"
@@ -148,7 +185,7 @@ build_cache() {
     trap 'rm -rf "$stage"' RETURN
 
     mkdir -p "$stage/boot" "$stage/usr/lib/modules"
-    cp "$BUILD_TREE/arch/x86/boot/bzImage" "$stage/boot/vmlinuz-linux-frlprobe"
+    cp "$img" "$stage/boot/vmlinuz-linux-frlprobe"
     cp -a "/usr/lib/modules/$kver" "$stage/usr/lib/modules/"
     # The build symlink points into the build tree; it is not part of the
     # runtime artefact and would be a dangling link after a restore.
@@ -459,6 +496,76 @@ do_status() {
     fi
 }
 
+# Installs the kernel that is sitting in the BUILD TREE, rather than the one in
+# the cache. This is the first half of the rebuild flow, and it exists because
+# --cache now packs what is installed: a freshly built kernel has to reach
+# /boot/frl and /usr/lib/modules before there is anything honest to cache.
+#
+#   ./install.sh --install-build [modules-dir]     modules-dir defaults to
+#                                                  $BUILD_TREE/../stage<N>/lib/modules
+#
+# Then boot it, confirm it works, and only then run --cache. That order is the
+# whole lesson of 2026-08-28: a cache entry that has never booted is not a
+# backup, it is an untested kernel scheduled to deploy itself unattended.
+#
+# Out-of-tree modules are NOT built here -- see ../sensors/ and ../bluetooth/ --
+# but their absence is called out, because losing them silently is how a probe
+# boot ends up with no fan readings and no Bluetooth.
+do_install_build() {
+    need_root
+
+    local bz="$BUILD_TREE/arch/x86/boot/bzImage"
+    [[ -f $bz ]] || die "no bzImage at $bz (set FRL_BUILD_TREE)"
+
+    local kver
+    kver="$(kver_of_image "$bz")" || die "cannot read the kernel version out of $bz"
+    log "build tree holds $kver"
+
+    # Where modules_install put the tree. An explicit argument wins; otherwise
+    # take the newest stage*/lib/modules/$kver next to the build tree.
+    local mods="${1:-}"
+    if [[ -z $mods ]]; then
+        local d
+        for d in "$(dirname "$BUILD_TREE")"/stage*/lib/modules/"$kver"; do
+            [[ -d $d ]] && mods="$d"
+        done
+    fi
+    [[ -n $mods && -d $mods ]]         || die "no staged modules for $kver -- run 'make modules_install INSTALL_MOD_PATH=...' first, or pass the path"
+    log "staged modules at $mods"
+
+    unlock_rootfs
+    trap relock_rootfs EXIT
+
+    log "installing the $kver module tree"
+    rm -rf "/usr/lib/modules/$kver"
+    cp -a "$mods" "/usr/lib/modules/$kver"
+    chown -R root:root "/usr/lib/modules/$kver"
+    # Points into the build tree; dangling after a restore, and not part of the
+    # runtime artefact.
+    rm -f "/usr/lib/modules/$kver/build"
+
+    if [[ ! -d "/usr/lib/modules/$kver/updates" ]]; then
+        warn "no updates/ in the module tree -- it87 and btusb_mt7902 are NOT installed"
+        warn "build them against $BUILD_TREE and install them before rebooting, or this kernel"
+        warn "boots with no fan or temperature readings and no Bluetooth"
+    fi
+
+    depmod "$kver"
+
+    log "installing the kernel image"
+    mkdir -p "$BOOT_SUBDIR"
+    install -Dm644 "$bz" "$BOOT_SUBDIR/vmlinuz-linux-frlprobe"
+
+    install_preset_file
+    regen_initramfs "$kver"
+    install_grub_entry
+    install_service
+
+    log "installed $kver from the build tree"
+    log "NEXT: reboot into it, confirm it works, THEN run: sudo ./install.sh --cache"
+    warn "the cache still holds $(cached_kver || echo '<nothing>') until you do"
+}
+
 do_uninstall() {
     need_root
     [[ $(uname -r) == "$(cached_kver 2>/dev/null)" ]] \
@@ -504,8 +611,9 @@ case "${1:---install}" in
     --install|"") do_install ;;
     --boot)       do_boot ;;
     --cache)      build_cache ;;
+    --install-build) shift; do_install_build "${1:-}" ;;
     --status)     do_status ;;
     --uninstall)  do_uninstall ;;
-    -h|--help)    sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;
+    -h|--help)    sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;
     *)            die "unknown option: $1 (try --help)" ;;
 esac

@@ -2,7 +2,9 @@
 
 ## Status: working, persistent, and the default boot entry
 
-**4K 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10, zero underflow - over the GPU's native HDMI port**, on a hand-built mainline **Linux 7.2-rc6**. Achieved 2026-08-06. The UGREEN DP→HDMI converter is out of the chain entirely.
+**4K 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10, zero underflow - over the GPU's native HDMI port**, on a hand-built mainline kernel. Achieved 2026-08-06. The UGREEN DP→HDMI converter is out of the chain entirely.
+
+> **Kernel version.** The machine runs **Linux 7.2 final**, release string `7.2.0-frlprobe`, built from `/home/deck/kernel-frl/build72`. The work up to 2026-08-08 was done on **7.2-rc6** (`7.2.0-rc6-frlprobe`) and the measurements below were taken there; the rebase onto 7.2 final on 21 August changed nothing about the result. Where an rc6 detail is load-bearing - a source line number, a measurement, a thing checked at the time - it is still named as rc6 on purpose.
 
 This is strictly better than what the converter delivered on picture quality: it managed 10 bpc *with* DSC, plus intermittent glitching. CEC was never tested while it was in the chain, and on the evidence below it may well have worked - see [CEC still does not work](#cec-still-does-not-work-m). See [hardware/display/](../display/README.md) for that setup, which this replaces.
 
@@ -26,11 +28,11 @@ Everything below this section is the reasoning. If you just want it working:
 
 All commands below are run from `hardware/kernel/` in this repo.
 
-1. **Get the sources** - Valve's kernel source package (for its config), plus mainline `v7.2-rc6` fetched into the same git repo. [Commands](#1-get-valves-source-tree).
+1. **Get the sources** - Valve's kernel source package (for its config), plus mainline `v7.2` fetched into the same git repo. [Commands](#1-get-valves-source-tree).
 2. **Apply the patches** - all five, in order, are in [patches/](patches/):
    ```bash
    cd /home/deck/kernel-frl/build72
-   git checkout -b frl v7.2-rc6
+   git checkout -b frl v7.2
    git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
    ```
    `0001` keeps gamescope's HDR offload working on a non-Valve kernel - take it regardless. `0002`-`0005` are AMD's unmerged VRR/ALLM series; skip them and you get 120 Hz without VRR.
@@ -45,17 +47,16 @@ All commands below are run from `hardware/kernel/` in this repo.
    ```
    `INSTALL_MOD_STRIP=1` is not optional in practice: without it the module tree is 2.2 GB instead of 178 MB, and `/` has under 800 MB free.
 4. **Rebuild any out-of-tree modules** you depend on, against the new tree, before you reboot into it. Here that is `it87` (fan and temp sensors) and `btusb_mt7902` (Bluetooth) - lose them silently and you will blame the kernel. [Details](#4-out-of-tree-modules).
-5. **Copy the modules into place**, then install:
+5. **Install what you built** - modules, kernel, initramfs, boot entry and self-heal service, straight from the build tree:
    ```bash
-   sudo cp -a /home/deck/kernel-frl/stage/lib/modules/<kver> /usr/lib/modules/
-   sudo depmod <kver>
-   sudo ./install.sh --cache     # pack kernel + modules into ~/.cache/frl-kernel
-   sudo ./install.sh --install   # deploy, initramfs, boot entry, self-heal service
+   sudo ./install.sh --install-build   # finds stage*/lib/modules/<kver> next to the build tree
    ```
+   Note what this does *not* do: it does not touch the cache. **Boot it first, then cache it** - `--cache` snapshots what is installed, so caching a kernel you have not booted stores an untested one and schedules it to deploy itself at the next OS update. That is exactly how this machine lost its kernel on 2026-08-28; see [The cache is the kernel](#the-cache-is-the-kernel-and-it-can-drift-silently).
 6. **Reboot.** A 10-second menu appears with the FRL entry preselected. The stock Valve kernel is one arrow-key up, and GRUB falls back to it automatically if the FRL entry cannot load - so a bad build costs you a reboot, not a lockout. That safety is built into `install.sh`; you do not configure it.
-7. **Check it:**
+7. **Check it, then cache it:**
    ```bash
    sudo ./install.sh --status
+   sudo ./install.sh --cache     # only now: pack the kernel you have just proven boots
    ```
    Every component line should read `yes`, and `grub.cfg is stock : yes`. The link-state block only appears when you are running the FRL kernel: `HPO` populated with `ACTIVE` and your horizontal resolution means the native FRL path is carrying the link, and `vrr_range` should show your display's own VRR range rather than `Min: 0 Max: 0` (this TV reports `40`-`120`).
 
@@ -124,10 +125,10 @@ Every article says to boot with `amdgpu.dc_feature_mask=0x400`. That is wrong tw
 
 Reproducible from scratch. The whole thing took about two hours, most of it unattended compile time.
 
-Everything the kernel carries on top of stock mainline is in [patches/](patches/) as `git format-patch` output, with provenance for each. Applying them in order onto a clean `v7.2-rc6` reproduces the running kernel:
+Everything the kernel carries on top of stock mainline is in [patches/](patches/) as `git format-patch` output, with provenance for each. Applying them in order onto a clean `v7.2` reproduces the running kernel:
 
 ```bash
-git checkout -b frl-rebuild v7.2-rc6
+git checkout -b frl-rebuild v7.2
 git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
 ```
 
@@ -152,8 +153,8 @@ That repo is a fork of mainline and shares its history, so pulling upstream into
 ```bash
 cd linux-neptune-618-drm-exec/archlinux-linux-neptune
 git remote add torvalds https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
-git fetch --no-tags torvalds tag v7.2-rc6
-git worktree add ../../build72 v7.2-rc6
+git fetch --no-tags torvalds tag v7.2
+git worktree add ../../build72 v7.2
 ```
 
 ### 2. Restore the Valve colour properties
@@ -196,12 +197,12 @@ About 25 minutes on the 9800X3D.
 
 ### 4. Out-of-tree modules
 
-`it87` (sensors) and `btusb_mt7902` (Bluetooth) must be rebuilt per-kernel or the probe boot loses fan/temp readings and Bluetooth. Both build cleanly against 7.2-rc6:
+`it87` (sensors) and `btusb_mt7902` (Bluetooth) must be rebuilt per-kernel or the probe boot loses fan/temp readings and Bluetooth. Both build cleanly against 7.2:
 
 ```bash
 # in the container, against /work/build72
 make -C /work/build72 M=$PWD modules                       # it87
-make KVER=7.2.0-rc6-frlprobe KSRC=/work/build72            # btusb_mt7902
+make KVER=7.2.0-frlprobe KSRC=/work/build72                # btusb_mt7902
 ```
 
 Install into `/usr/lib/modules/<kver>/updates/` and `depmod`, matching where [hardware/sensors/](../sensors/README.md) and [hardware/bluetooth/](../bluetooth/README.md) put them.
@@ -209,13 +210,16 @@ Install into `/usr/lib/modules/<kver>/updates/` and `depmod`, matching where [ha
 ## Install
 
 ```bash
-sudo ./install.sh --cache      # snapshot the INSTALLED kernel + modules into /home
-sudo ./install.sh              # deploy it and make it the default boot entry
-sudo ./install.sh --status     # what is installed, the live FRL link state, cache freshness
-sudo ./install.sh --uninstall  # remove everything, back to stock
+sudo ./install.sh --install-build  # install a freshly built kernel from the build tree
+sudo ./install.sh --cache          # snapshot the INSTALLED kernel + modules into /home
+sudo ./install.sh                  # deploy from the cache and make it the default boot entry
+sudo ./install.sh --status         # what is installed, the live FRL link state, cache freshness
+sudo ./install.sh --uninstall      # remove everything, back to stock
 ```
 
-`--cache` takes the bzImage from the build tree at `/home/deck/kernel-frl/build72` (override with `FRL_BUILD_TREE`) and the **installed** module tree at `/usr/lib/modules/<kver>`, and writes a **172 MB** tarball to `/home/deck/.cache/frl-kernel/`.
+The order matters and it is **build → `--install-build` → reboot → `--cache`**. `--cache` snapshots the **installed** kernel image at `/boot/frl/vmlinuz-linux-frlprobe` together with the **installed** module tree at `/usr/lib/modules/<kver>`, and writes a **172 MB** tarball to `/home/deck/.cache/frl-kernel/`. It reads the version out of the bzImage header rather than trusting a path, and warns when the build tree at `/home/deck/kernel-frl/build72` (override with `FRL_BUILD_TREE`) holds a different kernel from the installed one.
+
+It did not always do that: until 2026-08-28 it took the image from the build tree and the modules from `/usr/lib/modules`, which let a rebuild that was never installed get packed next to the previous build's modules. Same release string, so nothing could tell - until the restore after an OS update hung at the boot splash.
 
 That tarball is the only part of this that survives a SteamOS A/B update - `/boot` and `/usr/lib/modules` are both wiped, and `--boot` restores them from it. So **anything you add to the installed module tree is lost at the next OS update unless you re-run `--cache`**. Adding or rebuilding a module (`hid-steam`, `it87`, `btusb_mt7902`) means re-running it. `--status` compares the two and prints `cache freshness: STALE` with the offending files when they have drifted.
 
@@ -225,7 +229,7 @@ That tarball is the only part of this that survives a SteamOS A/B update - `/boo
 | ----------------------------------------------------- | ----------------------------------------------- | ------------------------ |
 | `/boot/frl/vmlinuz-linux-frlprobe`                    | the kernel                                      | no - restored from cache |
 | `/boot/frl/initramfs-linux-frlprobe{,-fallback}.img`  | generated by mkinitcpio                         | no - regenerated         |
-| `/usr/lib/modules/7.2.0-rc6-frlprobe/`                | modules, incl. `updates/{it87,btusb_mt7902}.ko` | no - restored from cache |
+| `/usr/lib/modules/7.2.0-frlprobe/`                    | modules, incl. `updates/{it87,btusb_mt7902}.ko` | no - restored from cache |
 | `/etc/mkinitcpio.d/linux-frlprobe.preset`             | so mkinitcpio knows about it                    | no - rewritten           |
 | `/efi/EFI/steamos/custom.cfg`                         | menu timeout, the FRL entry, and `set default`  | no - regenerated         |
 | `/etc/systemd/system/steam-machine-kernel.service`    | runs `--boot` at every boot                     | **yes** - keep-listed    |
@@ -413,7 +417,7 @@ Not merged, and not in `amd-staging-drm-next` - but note *why*: that branch's ti
 
 Two traps when searching for this work: check the branch's tip date before reading an absence as a decision, and grep for **AMD's** identifiers rather than Valve's. `allm_mode`, `hdmi_vrr_desktop_mode` and `freesync_pcon_allow_all` belong to a different, TMDS/PCON-only implementation and finding none of them says nothing about the FRL path.
 
-The thread mbox is fetchable from lore (Anubis blocks a plain `curl`; a git user-agent passes) and the patches apply by hand. 7.3 does not exist yet - 7.2 is still at rc6 - so this was a hand-applied in-review series or nothing. **Applied 2026-08-06**; see [patches/](patches/) for the ported series and what had to change to land it on mainline.
+The thread mbox is fetchable from lore (Anubis blocks a plain `curl`; a git user-agent passes) and the patches apply by hand. At the time 7.2 was still at rc6 and 7.3 did not exist, so this was a hand-applied in-review series or nothing. **Applied 2026-08-06**; see [patches/](patches/) for the ported series and what had to change to land it on mainline.
 
 **Why patch 3/4 is the one that mattered here.** The C9's EDID has **no AMD VSDB at all** - no FreeSync block. Every pre-series kernel derived HDMI FreeSync capability solely from that block, so this TV could never report VRR, on FRL or through the converter. Its HDMI Forum VSDB does carry `VRRmin: 40 Hz`, `VRRmax: 120 Hz` and `Supports Auto Low-Latency Mode`, and 3/4 is exactly the fallback that reads them. Patch 1/4 alone would have done nothing on this display.
 
@@ -445,10 +449,10 @@ Switching a TV off and on is a routine HPD event on a living-room machine, so th
 
 ### The probe kernel is mainline, so Valve's patches are gone (M)
 
-Not currently causing a visible problem, but worth being explicit about. Running 7.2-rc6 means the machine has lost:
+Not currently causing a visible problem, but worth being explicit about. Running mainline rather than Valve's tree means the machine has lost:
 
 - `allm_mode`, `hdmi_vrr_desktop_mode`, `freesync_pcon_allow_all` - Valve's out-of-tree amdgpu parameters, all confirmed absent from mainline `amdgpu_drv.c`
-- **`hid-steam` IDs for the 2026 Steam Controller.** Valve's 6.18.42 carries `1302`/`1303`/`1304`/`1305`; mainline 7.2-rc6 carries none of them, so the puck falls through to `hid-generic` and `hid_steam` never loads. Steam drives it over hidraw anyway, so nothing breaks - but there is no in-kernel gamepad node. See [hardware/controller/](../controller/README.md)
+- ~~**`hid-steam` IDs for the 2026 Steam Controller.**~~ **Closed 2026-08-10.** Mainline carries none of Valve's `1302`/`1303`/`1304`/`1305` IDs, so the puck fell through to `hid-generic`; Valve's `hid-steam.c` from `6.18.42-valve2` compiles unmodified against 7.2 and is now carried as patches `0007`-`0008`. See [patches/](patches/) and [hardware/controller/](../controller/README.md)
 - Whatever the `drm-exec` branch itself carries (unexamined - the tree is available now, so this is answerable)
 
 Everything else in `config-neptune` is either Steam Deck / handheld hardware that does not exist on an AM5 desktop (Vangogh audio, `MFD_STEAMDECK`, `LTRF216A`, the Lenovo/Asus/Zotac/OneXPlayer/MSI HID drivers) or plain config flags that were carried across by seeding from Valve's config.
@@ -464,9 +468,9 @@ Everything else in `config-neptune` is either Steam Deck / handheld hardware tha
 The end state is Valve's 6.18-drm-exec **plus** the FRL commits, so the machine keeps Valve's patches and gains FRL. All the pieces are already local:
 
 - the Valve bare repo at tag `6.18.33-drmexec-valve2`
-- `v7.2-rc6` fetched into the same repo, so the commits are directly cherry-pickable
+- `v7.2` fetched into the same repo, so the commits are directly cherry-pickable
 
-The commits to take, all verified present in `v7.2-rc6` (`075b74841bd0`):
+The commits to take, all verified present in `v7.2-rc6` (`075b74841bd0`) and therefore in `v7.2`:
 
 | SHA            | Subject                                                  |
 | -------------- | -------------------------------------------------------- |
@@ -544,6 +548,18 @@ You lose the FRL kernel for exactly one boot after an update. Making that zero w
 ```
 
 The restore died mid-`tar` with a `vmlinuz` in place and no modules, no initramfs, and `custom.cfg` never reached - which is how the stale-UUID boot entry above survived to be booted. `unlock_rootfs`/`relock_rootfs` now come from [`lib/rootfs.sh`](../../lib/rootfs.sh), which holds one exclusive `flock` on `/run/steam-machine-rootfs.lock` from *before* the status check until after the relock, so whoever holds it owns the read-only state for the whole of its critical section. A failed extraction also cleans up after itself now, rather than leaving the half-install that GRUB then tried to boot.
+
+### The cache is the kernel, and it can drift silently
+
+`~/.cache/frl-kernel/kernel.tar.zst` is the only copy of this kernel that survives an A/B update, so **whatever is in it is what the machine will be running after the next update** - not what is running now. Two ways that drifts apart, both hit on 2026-08-28:
+
+**1. A newer build that was never cached.** The 21 August rebase onto 7.2 final was built and installed, but `--cache` was never re-run. The update wiped the slot, the self-heal restored the 8 August 7.2-rc6 tarball, and the machine came back on a kernel three weeks older than the one it went down with. `--status`'s freshness check could not see it: it compares mtimes *inside* `/usr/lib/modules/$cached_kver`, and a differently-versioned installed kernel lives in a different directory entirely.
+
+**2. A cached pair that was never a pair.** `build_cache()` took the image from `$BUILD_TREE/arch/x86/boot/bzImage` while taking the modules from `/usr/lib/modules`. The 8 August pstore rebuild left the build tree ahead of what was installed, so the tarball ended up holding an 8 August bzImage next to 6 August modules. `CONFIG_LOCALVERSION` is unchanged across rebuilds, so both report `7.2.0-rc6-frlprobe`, `modprobe` raises nothing, and the mismatch only shows as a **hang at the boot splash with no journal at all** - the same failure `do_install()` already warns about for the vmlinuz/modules pair, arriving by a different route.
+
+Fixed 2026-08-28: `--cache` now reads the version out of the bzImage header with `file`, packs the **installed** image with the **installed** modules, and warns when the build tree has moved ahead of what is installed. The rule that follows: **after any rebuild, install it, boot it, then `--cache` it** - in that order. A cache entry that has never booted is not a backup, it is an untested kernel scheduled to deploy itself unattended.
+
+Worth knowing about the recovery, too: after two failed boots SteamOS fell back to the **other A/B slot**, which still held the 6 August kernel and the pre-update image, and booted it. That is why the machine stayed usable. `findmnt -no SOURCE /` tells you which slot you are on; the GRUB menu label does not.
 
 ### After a SteamOS update
 
@@ -651,7 +667,7 @@ less hardware/kernel/frl-4k120-evidence.txt
 Specifically, be aware that:
 
 - **The VRR patches are unmerged.** `0002`-`0005` are a public mailing-list posting, reviewed but not accepted, hand-ported to a tree they were not written against. They may change or be rejected upstream.
-- **7.2-rc6 is a release candidate.** It gets no stable or CVE fixes. Rebuild at 7.2 final.
+- **Rebuilding is on you.** The 7.2-rc6 build was replaced with **7.2 final on 2026-08-21**, so the release-candidate problem is gone - but a hand-built kernel still gets no 7.2.x stable or CVE fixes until you rebuild it. When you do: `--install-build`, boot it, *then* `--cache`. Getting that order wrong is what cost a working kernel on 2026-08-28.
 - **You lose Valve's kernel patches** while running it. See [the gap](#the-probe-kernel-is-mainline-so-valves-patches-are-gone-m) for what that costs on a desktop.
 - **A SteamOS update leaves you on the stock kernel for one boot.** Expected, not a fault - see [After a SteamOS update](#after-a-steamos-update).
 - **Power-off hangs. Fixed 2026-08-08**, but by two changes rather than one — an `mt7921e` blacklist and a shutdown-time VT switch. Both are installed and kept by `install.sh`; if either goes missing the hang returns. See below.

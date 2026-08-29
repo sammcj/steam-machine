@@ -1,0 +1,31 @@
+[Unit]
+Description=Restore input-remapper's system files after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/system/input-remapper/README.md
+# The application itself lives in /opt/input-remapper, which is a SteamOS
+# offload mount on the home partition and survives A/B updates untouched. What
+# does NOT survive is the handful of system-side files that have to exist
+# outside /opt:
+#
+#   /usr/bin/input-remapper-*            pkexec and udev resolve these by name
+#   /usr/share/input-remapper            DATA_DIR is hardcoded in the source
+#   /usr/share/polkit-1/actions/...      polkit reads actions from /usr only
+#   /etc/dbus-1/system.d/...             not on the atomic-update keep list
+#   /etc/udev/rules.d/...                not on the keep list either
+#
+# --boot reinstalls whichever of those are missing or modified, and rebuilds
+# the venv if SteamOS moved the system python to a new minor version (the venv
+# is --system-site-packages, so it borrows evdev/PyGObject/cairo from /usr and
+# breaks silently if that tree is renamed).
+After=local-fs.target
+Before=input-remapper.service systemd-user-sessions.service
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/system/input-remapper/install.sh --boot
+# A venv rebuild after a python bump downloads nothing but wheels; allow for it.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Restore sudo timestamp settings after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/system/sudo/README.md
+# /etc/sudoers.d is not on the atomic-update keep list, so the drop-in is
+# dropped by every A/B update unless the keep entry survives -- and the keep
+# entry lives in /etc/atomic-update.conf.d, which is itself only kept because
+# it is on the list. --boot restores both, and validates before it does.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/system/sudo/install.sh --boot
+
+[Install]
+WantedBy=multi-user.target
