@@ -4,7 +4,16 @@
 
 **4K 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10, zero underflow - over the GPU's native HDMI port**, on a hand-built mainline kernel. Achieved 2026-08-06. The UGREEN DP→HDMI converter is out of the chain entirely.
 
-> **Kernel version.** The machine runs **Linux 7.2 final**, release string `7.2.0-frlprobe`, built from `/home/deck/kernel-frl/build72`. The work up to 2026-08-08 was done on **7.2-rc6** (`7.2.0-rc6-frlprobe`) and the measurements below were taken there; the rebase onto 7.2 final on 21 August changed nothing about the result. Where an rc6 detail is load-bearing - a source line number, a measurement, a thing checked at the time - it is still named as rc6 on purpose.
+> **Kernel version.** The machine runs **Linux 7.2.2**, release string `7.2.2-frlprobe`, built from `/home/deck/kernel-frl/build72`. The work up to 2026-08-08 was done on **7.2-rc6** (`7.2.0-rc6-frlprobe`), rebased onto **7.2 final** on 21 August (`7.2.0-frlprobe`) and onto **7.2.2** on 29 August. The measurements below were taken on rc6 and neither rebase changed the result. Where an rc6 detail is load-bearing - a source line number, a measurement, a thing checked at the time - it is still named as rc6 on purpose.
+>
+> **Stable point releases are not in Linus's tree.** `git fetch torvalds tag v7.2.2` fails with `couldn't find remote ref` - 7.2.x lives in the *stable* tree, and the repo needs a second remote for it:
+>
+> ```bash
+> git remote add stable https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+> git fetch --no-tags stable tag v7.2.2
+> ```
+>
+> The fetch is incremental on top of an existing mainline clone (7.2.2 is two commits past `v7.2`), so it costs seconds, not another 3.7 GB.
 
 This is strictly better than what the converter delivered on picture quality: it managed 10 bpc *with* DSC, plus intermittent glitching. CEC was never tested while it was in the chain, and on the evidence below it may well have worked - see [CEC still does not work](#cec-still-does-not-work-m). See [hardware/display/](../display/README.md) for that setup, which this replaces.
 
@@ -28,11 +37,11 @@ Everything below this section is the reasoning. If you just want it working:
 
 All commands below are run from `hardware/kernel/` in this repo.
 
-1. **Get the sources** - Valve's kernel source package (for its config), plus mainline `v7.2` fetched into the same git repo. [Commands](#1-get-valves-source-tree).
+1. **Get the sources** - Valve's kernel source package (for its config), plus `v7.2.2` fetched into the same git repo from the **stable** remote, not `torvalds`. [Commands](#1-get-valves-source-tree).
 2. **Apply the patches** - all five, in order, are in [patches/](patches/):
    ```bash
    cd /home/deck/kernel-frl/build72
-   git checkout -b frl v7.2
+   git checkout -b frl v7.2.2
    git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
    ```
    `0001` keeps gamescope's HDR offload working on a non-Valve kernel - take it regardless. `0002`-`0005` are AMD's unmerged VRR/ALLM series; skip them and you get 120 Hz without VRR.
@@ -125,10 +134,10 @@ Every article says to boot with `amdgpu.dc_feature_mask=0x400`. That is wrong tw
 
 Reproducible from scratch. The whole thing took about two hours, most of it unattended compile time.
 
-Everything the kernel carries on top of stock mainline is in [patches/](patches/) as `git format-patch` output, with provenance for each. Applying them in order onto a clean `v7.2` reproduces the running kernel:
+Everything the kernel carries on top of stock mainline is in [patches/](patches/) as `git format-patch` output, with provenance for each. Applying them in order onto a clean `v7.2.2` reproduces the running kernel:
 
 ```bash
-git checkout -b frl-rebuild v7.2
+git checkout -b frl-rebuild v7.2.2
 git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
 ```
 
@@ -155,6 +164,13 @@ cd linux-neptune-618-drm-exec/archlinux-linux-neptune
 git remote add torvalds https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
 git fetch --no-tags torvalds tag v7.2
 git worktree add ../../build72 v7.2
+
+# Stable point releases (7.2.1, 7.2.2, ...) are NOT in Linus's tree -- fetching
+# them from `torvalds` fails with `couldn't find remote ref refs/tags/v7.2.2`.
+# They need the stable tree, which shares the same history so the fetch is
+# incremental:
+git remote add stable https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+git fetch --no-tags stable tag v7.2.2
 ```
 
 ### 2. Restore the Valve colour properties
@@ -202,7 +218,7 @@ About 25 minutes on the 9800X3D.
 ```bash
 # in the container, against /work/build72
 make -C /work/build72 M=$PWD modules                       # it87
-make KVER=7.2.0-frlprobe KSRC=/work/build72                # btusb_mt7902
+make KVER=7.2.2-frlprobe KSRC=/work/build72                # btusb_mt7902
 ```
 
 Install into `/usr/lib/modules/<kver>/updates/` and `depmod`, matching where [hardware/sensors/](../sensors/README.md) and [hardware/bluetooth/](../bluetooth/README.md) put them.
@@ -229,7 +245,7 @@ That tarball is the only part of this that survives a SteamOS A/B update - `/boo
 | ----------------------------------------------------- | ----------------------------------------------- | ------------------------ |
 | `/boot/frl/vmlinuz-linux-frlprobe`                    | the kernel                                      | no - restored from cache |
 | `/boot/frl/initramfs-linux-frlprobe{,-fallback}.img`  | generated by mkinitcpio                         | no - regenerated         |
-| `/usr/lib/modules/7.2.0-frlprobe/`                    | modules, incl. `updates/{it87,btusb_mt7902}.ko` | no - restored from cache |
+| `/usr/lib/modules/7.2.2-frlprobe/`                    | modules, incl. `updates/{it87,btusb_mt7902}.ko` | no - restored from cache |
 | `/etc/mkinitcpio.d/linux-frlprobe.preset`             | so mkinitcpio knows about it                    | no - rewritten           |
 | `/efi/EFI/steamos/custom.cfg`                         | menu timeout, the FRL entry, and `set default`  | no - regenerated         |
 | `/etc/systemd/system/steam-machine-kernel.service`    | runs `--boot` at every boot                     | **yes** - keep-listed    |
@@ -488,9 +504,44 @@ The two AV-mute commits are `Cc: stable` and fix "garbled display after link re-
 
 Expect real work: `dc/dml2` was renamed to `dc/dml2_0` in 6.19, and there are roughly 740 commits of DC churn between 6.18 and 7.2. Budget a day, not an afternoon.
 
-### 2. Or just wait for 7.2 final, then for Valve (L)
+### 2. Or just wait for 7.2 final, then for Valve - DONE for 7.2, still waiting on Valve (L)
 
-7.2 final is due 16-30 Aug 2026. Valve are on 6.18 now, so a 7.2-based neptune kernel is likely months away, and they may well leave FRL disabled since upstream does.
+7.2 final landed 17 Aug 2026 and this build rebased onto it on 21 August, then onto **7.2.2** on 29 August. Valve are still on 6.18, so a 7.2-based neptune kernel is likely months away, and they may well leave FRL disabled since upstream does. Nothing to wait for on the mainline side any more - see [Rebasing onto a new stable release](#rebasing-onto-a-new-stable-release).
+
+### Rebasing onto a new stable release
+
+Done for 7.2 → 7.2.2 on 2026-08-29. About 40 minutes end to end, most of it the ~25 minute compile. The whole procedure:
+
+```bash
+cd /home/deck/kernel-frl/build72
+
+# 1. Fetch the tag. Stable point releases are NOT in Linus's tree -- see the
+#    note at the top of this file.
+git remote add stable https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git   # once
+git fetch --no-tags stable tag v7.2.2
+
+# 2. New branch at the tag, patches on top. Keep the old branch: it is the only
+#    record of exactly what the previous kernel was.
+git checkout -B frl-722 v7.2.2
+git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
+
+# 3. Reuse the existing .config -- it is untracked, so the checkout leaves it
+#    alone, and re-seeding from Valve's would discard any answer given since.
+cd /home/deck/kernel-frl
+podman run --rm -v $PWD:/work -w /work/build72 localhost/kbuild:arch make olddefconfig
+podman run --rm -v $PWD:/work -w /work/build72 localhost/kbuild:arch make -j$(nproc) all
+podman run --rm -v $PWD:/work -w /work/build72 localhost/kbuild:arch \
+  make -j$(nproc) modules_install INSTALL_MOD_PATH=/work/stage722 INSTALL_MOD_STRIP=1
+
+# 4. Out-of-tree modules against the new KVER, then install, boot, and only
+#    then cache.
+```
+
+**Before starting, read the changelogs rather than assuming the patches still apply.** For 7.2.1 and 7.2.2, grepping both for `amdgpu`, `drm/amd`, `hid-steam` and `mt76` returned nothing, so none of the eight patches could have been upstreamed or conflicted - and none were. 7.2.1 is 83 fixes (Bluetooth core, HID, NFC, io_uring, futex, filesystems); 7.2.2 is a single one, `inet: frags: strip GSO state from fragments before reassembly`, an unprivileged local panic in `skb_segment()`. Nothing display-, GPU- or shutdown-related in either, so **a stable bump was never going to fix the power-off hang** - the `mt7921e` blacklist and the shutdown VT switch are both still required.
+
+**A stable bump changes the release string**, which is the one way it differs from an ordinary rebuild: `7.2.0-frlprobe` → `7.2.2-frlprobe`. The new modules land in a new `/usr/lib/modules` directory and the old tree is left intact, so a rollback has something to roll back to. `/boot/frl/vmlinuz-linux-frlprobe` is still overwritten in place - the boot filenames carry no version - so take the artefact backup anyway.
+
+Nothing in `install.sh` needs editing for a version bump: `kver_of_image()` reads the version out of the bzImage header and `--install-build` discovers `stage*/lib/modules/<kver>` next to the build tree.
 
 ### 3. Answer the open question about `drm-exec` (L)
 
@@ -667,7 +718,7 @@ less hardware/kernel/frl-4k120-evidence.txt
 Specifically, be aware that:
 
 - **The VRR patches are unmerged.** `0002`-`0005` are a public mailing-list posting, reviewed but not accepted, hand-ported to a tree they were not written against. They may change or be rejected upstream.
-- **Rebuilding is on you.** The 7.2-rc6 build was replaced with **7.2 final on 2026-08-21**, so the release-candidate problem is gone - but a hand-built kernel still gets no 7.2.x stable or CVE fixes until you rebuild it. When you do: `--install-build`, boot it, *then* `--cache`. Getting that order wrong is what cost a working kernel on 2026-08-28.
+- **Rebuilding is on you.** 7.2-rc6 → 7.2 final on 2026-08-21 → **7.2.2 on 2026-08-29**. A hand-built kernel gets no stable or CVE fixes until you rebuild it, and nothing will tell you a point release has shipped. When you do: `--install-build`, boot it, *then* `--cache`. Getting that order wrong is what cost a working kernel on 2026-08-28. The procedure is [Rebasing onto a new stable release](#rebasing-onto-a-new-stable-release).
 - **You lose Valve's kernel patches** while running it. See [the gap](#the-probe-kernel-is-mainline-so-valves-patches-are-gone-m) for what that costs on a desktop.
 - **A SteamOS update leaves you on the stock kernel for one boot.** Expected, not a fault - see [After a SteamOS update](#after-a-steamos-update).
 - **Power-off hangs. Fixed 2026-08-08**, but by two changes rather than one — an `mt7921e` blacklist and a shutdown-time VT switch. Both are installed and kept by `install.sh`; if either goes missing the hang returns. See below.
@@ -702,7 +753,7 @@ With `mt7921e` gone the machine still hung, from the Steam menu and from a plain
 
 **Fix:** `systemd/steam-machine-shutdown-vt.service` runs `chvt 4` at the *start* of shutdown, via `Conflicts=shutdown.target` plus `Before=shutdown.target`, so its `ExecStop` fires while the session is still up. VC4 rather than VC2 because `fbcon=vc:4-6` renders only VCs 4-6.
 
-**This one is a workaround.** The underlying bug is presumably in amdgpu's shutdown path on 7.2 and has not been identified. Re-test at 7.2 final. The text console you now see during shutdown is this unit working, not a fault.
+**This one is a workaround.** The underlying bug is presumably in amdgpu's shutdown path on 7.2 and has not been identified. Still present on 7.2 final, and **7.2.2 cannot have fixed it**: neither 7.2.1 nor 7.2.2 touches `drivers/gpu/drm/amd` at all. The text console you now see during shutdown is this unit working, not a fault.
 
 Both fixes are installed by `install.sh`, listed in the atomic-update keep file, and reinstalled by `install.sh --boot` ahead of its early exit. `--status` reports both.
 

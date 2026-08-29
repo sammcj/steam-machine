@@ -1,12 +1,16 @@
 # Kernel patches
 
-Everything this machine's kernel carries on top of stock mainline, as `git format-patch` output. Applied in numeric order onto a clean `v7.2-rc6` tree they reproduce the running kernel exactly.
+Everything this machine's kernel carries on top of stock mainline, as `git format-patch` output. Applied in numeric order onto a clean `v7.2.2` tree they reproduce the running kernel exactly.
 
 ```bash
 cd /home/deck/kernel-frl/build72
-git checkout -b frl-rebuild v7.2-rc6
+git checkout -b frl-rebuild v7.2.2
 git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
 ```
+
+All eight applied to `v7.2.2` with no fuzz and no conflicts on 2026-08-29. Verified against the 7.2.1 and 7.2.2 changelogs beforehand: neither release touches `drivers/gpu/drm/amd`, `drivers/hid/hid-steam.c` or `hid-ids.h`, so nothing here was upstreamed or superseded. `0006` in particular was expected to land via AMD's "DC Patches Aug 10 2026" series and has **not** reached 7.2.x stable - keep carrying it.
+
+Tags earlier than `v7.2` are still reachable if you need to reproduce an older result; `v7.2-rc6` was the tree everything up to 2026-08-08 was measured on.
 
 | Patch | Origin | Why it is here |
 |---|---|---|
@@ -91,23 +95,30 @@ Each patch's commit message records its own deviations.
 Build steps are in [../README.md](../README.md#3-config-and-build). After a successful build:
 
 ```bash
-sudo ../install.sh --cache     # repack the artefact tarball from the build tree
-sudo ../install.sh --install   # deploy, regenerate initramfs, rewrite custom.cfg
+sudo ../install.sh --install-build   # deploy straight from the build tree
+# reboot, confirm it works, and only then:
+sudo ../install.sh --cache           # snapshot the kernel you have proven boots
 ```
 
-**Watch the version string.** `CONFIG_LOCALVERSION="-frlprobe"` is unchanged by `0002`–`0006`, so a rebuild produces the *same* `7.2.0-rc6-frlprobe` release string and overwrites `/usr/lib/modules/7.2.0-rc6-frlprobe` and `/boot/frl/` in place. There is no second menu entry to fall back to. Before deploying a rebuild, keep the working artefact under a name that says what it predates:
+**That order is not interchangeable.** An earlier version of this file had `--cache` first; caching a kernel that has never booted stores an untested one and schedules it to deploy itself unattended at the next OS update, which is what cost this machine its kernel on 2026-08-28. See [../README.md](../README.md#the-cache-is-the-kernel-and-it-can-drift-silently).
+
+**Watch the version string.** `CONFIG_LOCALVERSION="-frlprobe"` is unchanged by any patch here, so a rebuild *at the same upstream version* produces the same release string and overwrites `/usr/lib/modules/<kver>` and `/boot/frl/` in place, with no second menu entry to fall back to.
+
+A **stable bump** is the exception and is safer for it: 7.2 → 7.2.2 changes the release string to `7.2.2-frlprobe`, so the new modules land in a new directory and the previous tree is left intact. `/boot/frl/vmlinuz-linux-frlprobe` is still overwritten in place, though, because the boot filenames carry no version - so the backup below is still worth taking.
+
+Before deploying a rebuild, keep the working artefact under a name that says what it predates:
 
 ```bash
 cp -n ~/.cache/frl-kernel/kernel.tar.zst ~/.cache/frl-kernel/kernel.tar.zst.pre-<change>
 ```
 
-Kept so far: `.pre-vrr` (before `0002`–`0005`) and `.pre-frlrestore` (before `0006`).
+Kept so far: `.pre-vrr` (before `0002`–`0005`), `.pre-frlrestore` (before `0006`) and `.pre-722` (before the 7.2 → 7.2.2 bump).
 
 To roll back: boot the stock Valve kernel from the GRUB menu, then
 
 ```bash
 cp ~/.cache/frl-kernel/kernel.tar.zst.pre-vrr ~/.cache/frl-kernel/kernel.tar.zst
-sudo rm -rf /boot/frl /usr/lib/modules/7.2.0-rc6-frlprobe
+sudo rm -rf /boot/frl /usr/lib/modules/7.2.2-frlprobe
 sudo ../install.sh --install
 ```
 
