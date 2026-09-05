@@ -1,0 +1,18 @@
+[Unit]
+Description=Recover a broken xHCI USB controller
+Documentation=file:///home/deck/git/steam-machine/hardware/usb/README.md
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/home/deck/git/steam-machine/hardware/usb/bin/usb-watchdog.sh
+# The script exits 1 deliberately when recovery stops holding -- that is a
+# report, not a crash, and restarting it would just resume the flapping it
+# stopped. on-failure would undo the give-up logic.
+Restart=no
+# Recovering the bus is the whole point; being killed mid-remove would leave a
+# half-removed pci_dev. Nothing here is CPU- or memory-hungry.
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

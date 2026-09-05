@@ -1,0 +1,29 @@
+[Unit]
+Description=Restore USB runtime-PM udev rule after a SteamOS update
+Documentation=file:///home/deck/git/steam-machine/hardware/usb/README.md
+# All this unit does is put /etc back.
+#
+# Only an allowlisted subset of /etc carries into a new SteamOS image. This
+# unit is on the default list (/etc/systemd/system/*.service), but the thing
+# this subsystem depends on is not:
+#
+#   /etc/udev/rules.d/60-steam-machine-usb.rules
+#
+# It is covered by an atomic-update.conf.d drop-in (also allowlisted), but that
+# is only good if the drop-in was present when the update ran. Re-installing
+# the rule here is the fix for the first update after this subsystem lands, and
+# for any case where the drop-in itself went missing.
+#
+# /etc is an overlayfs with its upper layer in /var, writable even when
+# steamos-readonly is enabled, so this needs no rootfs unlock.
+After=local-fs.target
+Before=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/deck/git/steam-machine/hardware/usb/install.sh --boot
+# Never block boot: a missing udev rule costs resilience, not function.
+
+[Install]
+WantedBy=multi-user.target

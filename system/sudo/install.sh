@@ -68,8 +68,10 @@ TARGET_USER="deck"
 
 # sudo ignores any file in sudoers.d whose name contains a dot, so the
 # installed name has no extension even though the repo copy carries .conf.
-DROPIN_SRC="$REPO_DIR/sudoers.d/10-steam-machine.conf"
-DROPIN_DEST="/etc/sudoers.d/10-steam-machine"
+DROPIN_SRC="$REPO_DIR/sudoers.d/zz-steam-machine.conf"
+DROPIN_DEST="/etc/sudoers.d/zz-steam-machine"
+# Pre-rename names, removed on sight. See ensure_etc_config.
+DROPIN_LEGACY=(/etc/sudoers.d/10-steam-machine /etc/sudoers.d/99-steam-machine)
 KEEP_SRC="$REPO_DIR/atomic-update.conf.d/steam-machine-sudo.conf"
 KEEP_DEST="/etc/atomic-update.conf.d/steam-machine-sudo.conf"
 UNIT_SRC="$REPO_DIR/systemd/steam-machine-sudo.service"
@@ -109,7 +111,7 @@ install_dropin() {
     # way -- so without these an `install` or `mv` that failed would fall
     # through, `visudo -cq` would pass against the file still sitting there, and
     # the run would report "restored" having written nothing.
-    local tmp="/etc/sudoers.d/.10-steam-machine.new"
+    local tmp="/etc/sudoers.d/.zz-steam-machine.new"
     install -m440 -o root -g root "$DROPIN_SRC" "$tmp" \
         || die "could not write $tmp -- nothing changed"
     mv -f "$tmp" "$DROPIN_DEST" \
@@ -140,6 +142,19 @@ ensure_etc_config() {
     # silent, permanent failure (the next A/B update then deletes the drop-in
     # for good, with no unit left to put it back), so skipping it because a
     # validator is absent would defeat the entire subsystem.
+    # The drop-in has been installed under two earlier names (10-, then 99-),
+    # both of which sort BEFORE SteamOS's own /etc/sudoers.d/wheel and so lost
+    # last-match-wins. Removing them first is not tidiness: a leftover copy
+    # defines the same Cmnd_Alias names a second time, which makes the WHOLE
+    # sudoers set fail to parse, and install_dropin then correctly rolls the new
+    # file straight back out again.
+    local legacy
+    for legacy in "${DROPIN_LEGACY[@]}"; do
+        [[ -f "$legacy" ]] || continue
+        rm -f "$legacy" \
+            && warn "removed superseded $legacy" \
+            || warn "could not remove $legacy -- delete it by hand"
+    done
     if command -v visudo >/dev/null 2>&1; then
         if install_dropin; then
             warn "restored $DROPIN_DEST (was missing or modified)"

@@ -1,0 +1,43 @@
+# Pin runtime PM off on every xHCI controller. Installed to
+# /etc/udev/rules.d/60-steam-machine-usb.rules.
+#
+# THE FAILURE THIS PREVENTS
+#
+# A hub error storm wedges the xHC command ring. The next runtime-suspend
+# attempt then times out in xhci_suspend()'s 20 ms STS_SAVE handshake:
+#
+#   xhci_hcd 0000:12:00.4: Controller Save State failed -110
+#   xhci_hcd 0000:12:00.4: can't suspend (hcd_pci_runtime_suspend returned -110)
+#
+# That sets dev->power.runtime_error, after which every runtime PM transition
+# for the device returns -EINVAL forever and power/runtime_status reads "error".
+# Nothing in userspace can clear it -- runtime_status is DEVICE_ATTR_RO and the
+# flag only clears inside the kernel-internal __pm_runtime_set_status(). The
+# bus stays degraded until the pci_dev is destroyed and re-created.
+#
+# A controller that never runtime-suspends never runs that handshake, so it
+# cannot reach the error state. The hub still misbehaves; the controller
+# survives it.
+#
+# WHY THE RULE AND NOT A BOOT SCRIPT
+#
+# The poisoning suspend happened 63 s into boot on 2026-09-05. A boot-time
+# write has to win a race it does not reliably win; a udev rule applies as the
+# device appears, and re-applies on the `bind` after usb-reset.sh removes and
+# rescans the controller.
+#
+# WHY CLASS AND NOT DEVICE IDs
+#
+# 0x0c0330 is PCI class "USB controller, xHCI". Matching it covers all four
+# functions on this board and survives renumbering -- these controllers have
+# already moved once (11:00.4 -> 12:00.4), which is why hardware/audio/README.md
+# still names an address that no longer exists.
+#
+# COST
+#
+# Two of the four controllers (12:00.3, 13:00.0) currently do reach `suspended`
+# with nothing attached, and will now stay `active`. That is a small idle power
+# increase in exchange for the bus not needing a reset to come back. Note
+# system/power/ already accepts the same trade on 0f:00.0, whose USB children
+# are pinned `on` for input latency.
+ACTION=="add|bind", SUBSYSTEM=="pci", ATTR{class}=="0x0c0330", ATTR{power/control}="on"
