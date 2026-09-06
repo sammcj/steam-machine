@@ -17,13 +17,20 @@ Documentation=file:///home/deck/git/steam-machine/hardware/usb/README.md
 # /etc is an overlayfs with its upper layer in /var, writable even when
 # steamos-readonly is enabled, so this needs no rootfs unlock.
 After=local-fs.target
-Before=systemd-user-sessions.service
+# Deliberately NOT ordered Before=systemd-user-sessions.service. It was, and on
+# 2026-09-06 that turned a hang in this unit into an unbootable machine:
+# systemd-user-sessions is a dependency of graphical.target, so blocking it
+# blocks the session, and the only symptom is a black screen. Nothing this unit
+# does needs to happen before a user logs in -- a udev rule that lands a few
+# seconds late costs resilience, not function.
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/home/deck/git/steam-machine/hardware/usb/install.sh --boot
-# Never block boot: a missing udev rule costs resilience, not function.
+# Hard cap so this unit can never wedge a boot again, whatever goes wrong
+# inside the script. Failing is fine; hanging is not.
+TimeoutStartSec=60
 
 [Install]
 WantedBy=multi-user.target

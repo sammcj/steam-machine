@@ -130,13 +130,29 @@ ensure_enabled() {
     # bug was fixed, install.sh reported success, and the buggy loop was still
     # the one deciding whether to reset the bus. The loop is stateless (it
     # rebuilds its recovery window from scratch), so a restart costs nothing.
+    #
+    # --no-block WHEN CALLED FROM A UNIT, AND IT IS NOT OPTIONAL.
+    #
+    # This script is the ExecStart of steam-machine-usb.service. A blocking
+    # `systemctl start` from inside a unit's own ExecStart deadlocks: systemd
+    # will not dispatch the new job while the calling unit's job is still
+    # running, and the call waits on it forever. On 2026-09-06 that took the
+    # machine down -- the unit hung 24 s, graphical.target was never reached,
+    # and the only way out was booting the other slot.
+    #
+    # systemd sets INVOCATION_ID for every service it runs, so that is the
+    # test. Interactively it stays blocking, because there the exit status is
+    # worth having. The unit is WantedBy=multi-user.target regardless, so
+    # systemd starts it on its own during boot and --no-block loses nothing.
+    local nb=()
+    [[ -n ${INVOCATION_ID:-} ]] && nb=(--no-block)
     if [[ ${RESTART_WATCHDOG:-1} -eq 1 ]]; then
         log "restarting $WATCHDOG_UNIT (picks up any script change)"
-        systemctl restart "$WATCHDOG_UNIT" || warn "could not restart $WATCHDOG_UNIT"
+        systemctl "${nb[@]}" restart "$WATCHDOG_UNIT" || warn "could not restart $WATCHDOG_UNIT"
         changed=0
     elif ! systemctl is-active --quiet "$WATCHDOG_UNIT"; then
         log "starting $WATCHDOG_UNIT"
-        systemctl start "$WATCHDOG_UNIT" || warn "could not start $WATCHDOG_UNIT"
+        systemctl "${nb[@]}" start "$WATCHDOG_UNIT" || warn "could not start $WATCHDOG_UNIT"
         changed=0
     fi
     return $changed

@@ -113,6 +113,26 @@ Watchdog exercised against a genuinely broken controller on 2026-09-05, not a si
 
 The same run is also where the `runtime_status=error` false positive was found: the bus it "recovered" had not actually been down. The recovery path is proven; the trigger that fired it was wrong and has been narrowed to the structural test above.
 
+## Trap: never call blocking `systemctl` from a unit's ExecStart
+
+This subsystem made the machine unbootable once, on 2026-09-06, and it had nothing to do with USB.
+
+`install.sh --boot` is the `ExecStart` of `steam-machine-usb.service`, and it called `systemctl start steam-machine-usb-watchdog.service` synchronously. systemd will not dispatch that job while the calling unit's own job is still running, so the call waits on it forever. The unit was also ordered `Before=systemd-user-sessions.service`, which `graphical.target` depends on — so the session never started:
+
+```
+18:40:19  Starting Restore USB runtime-PM udev rule...
+18:40:19  install.sh: ==> starting steam-machine-usb-watchdog.service
+18:40:43  Job for steam-machine-usb-watchdog.service canceled.
+          (graphical.target never reached -- black screen)
+```
+
+Two rules follow, and they apply to every unit in this repo:
+
+- **Never call blocking `systemctl start`/`restart` from inside a unit.** Use `--no-block`, keyed on `INVOCATION_ID` so interactive runs keep their exit status. A unit that is `WantedBy=` a target is started by systemd anyway; starting it by hand from a sibling unit buys nothing.
+- **Do not order anything `Before=systemd-user-sessions.service`** unless a login genuinely depends on it. The symptom of getting this wrong is a black screen with nothing useful on the console — on a machine whose only display is a TV, indistinguishable from a display bug.
+
+`TimeoutStartSec=60` is now on the boot unit as a backstop. Failing is fine; hanging is not.
+
 ## Rejected
 
 - **`early_stop=1` on the storming ports.** Per-port, caps enumeration at two attempts instead of hundreds, which would bound the stall. Rejected because the latch is one-way: `hub.c:5836` skips *all* port events once `ignore_event` is set, so a replug does not clear it — the replug is the event being ignored. Clearing it needs `echo 0 > early_stop`, a re-enumeration, then `echo 1` to re-arm; writing `0` then `1` back to back leaves the port deaf. A port that needs a manual write to come back is worse than a slow one on a machine whose only console is a TV.
