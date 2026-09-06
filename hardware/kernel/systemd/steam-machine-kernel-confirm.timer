@@ -1,0 +1,21 @@
+[Unit]
+Description=Cache the FRL kernel 10 minutes after a boot that reached the GUI
+Documentation=file:///home/deck/git/steam-machine/hardware/kernel/README.md
+
+[Timer]
+# Ten minutes of uptime with a live graphical session is this machine's working
+# definition of "that boot was fine": a kernel that panics, hangs at the splash,
+# loses the display or drops the Steam session has already failed by then, and
+# it is still soon enough to land in the same sitting as the reboot that
+# installed it.
+OnBootSec=10min
+# The first fire can legitimately land before there is a session -- the TV was
+# off, or the machine sat at a login prompt. --confirm exits 0 without caching
+# in that case, so keep asking. After a successful cache every later fire is a
+# sub-second no-op (it compares two build ids and returns), so leaving this
+# running for the rest of the uptime costs nothing.
+OnUnitActiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

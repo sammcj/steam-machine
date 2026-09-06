@@ -1,0 +1,17 @@
+[Unit]
+Description=Cache the FRL kernel once it has proven it boots to a graphical session
+Documentation=file:///home/deck/git/steam-machine/hardware/kernel/README.md
+# The cache tarball lives on /home and the kernel it packs lives on /boot.
+RequiresMountsFor=/home /boot
+ConditionPathExists=/home/deck/git/steam-machine/hardware/kernel/install.sh
+
+[Service]
+Type=oneshot
+ExecStart=/home/deck/git/steam-machine/hardware/kernel/install.sh --confirm
+# Packing ~180 MB of modules through zstd takes well over the default 90s on a
+# cold page cache.
+TimeoutStartSec=600
+
+# Deliberately NO [Install] section. This unit is started by its .timer and by
+# nothing else: it must never be pulled into a boot transaction, because the
+# one thing a kernel-caching job must not do is delay the boot it is judging.

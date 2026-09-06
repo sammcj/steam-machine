@@ -64,7 +64,20 @@ _ro_warn() { command -v warn >/dev/null 2>&1 && warn "$@" || printf '[warn] %s\n
 _ro_lock() {
     [[ -n $_RO_LOCK_FD ]] && return 0          # already held by this process
     command -v flock >/dev/null 2>&1 || return 0
-    exec {_RO_LOCK_FD}>"$_RO_LOCK_FILE" 2>/dev/null || { _RO_LOCK_FD=; return 0; }
+    # The braces are load-bearing. `exec` with redirections and NO command
+    # applies them to the shell PERMANENTLY, so the obvious spelling --
+    #
+    #     exec {_RO_LOCK_FD}>"$_RO_LOCK_FILE" 2>/dev/null
+    #
+    # -- does not just silence a failure of this exec: it points fd 2 at
+    # /dev/null for the rest of the process. Every _ro_warn and every caller's
+    # warn/die after the first unlock_rootfs then vanishes, in all eight
+    # subsystems that source this file. Found 2026-09-06 chasing a missing
+    # warning at the end of hardware/kernel's --install-build; the messages lost
+    # this way included "power-off will hang" and "could not restore ...".
+    #
+    # Wrapping in a group scopes the redirection to the group instead.
+    { exec {_RO_LOCK_FD}>"$_RO_LOCK_FILE"; } 2>/dev/null || { _RO_LOCK_FD=; return 0; }
     if ! flock -w "$_RO_LOCK_WAIT" "$_RO_LOCK_FD"; then
         _ro_warn "timed out after ${_RO_LOCK_WAIT}s waiting for $_RO_LOCK_FILE -- continuing unserialised"
         exec {_RO_LOCK_FD}>&-

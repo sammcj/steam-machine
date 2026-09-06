@@ -4,7 +4,9 @@
 
 **4K 120 Hz, RGB 4:4:4, 12 bpc, uncompressed, HDR10, zero underflow - over the GPU's native HDMI port**, on a hand-built mainline kernel. Achieved 2026-08-06. The UGREEN DP→HDMI converter is out of the chain entirely.
 
-> **Kernel version.** The machine runs **Linux 7.2.2**, release string `7.2.2-frlprobe`, built from `/home/deck/kernel-frl/build72`. The work up to 2026-08-08 was done on **7.2-rc6** (`7.2.0-rc6-frlprobe`), rebased onto **7.2 final** on 21 August (`7.2.0-frlprobe`) and onto **7.2.2** on 29 August. The measurements below were taken on rc6 and neither rebase changed the result. Where an rc6 detail is load-bearing - a source line number, a measurement, a thing checked at the time - it is still named as rc6 on purpose.
+> **Kernel version.** The machine runs **Linux 7.2.3**, release string `7.2.3-frlprobe`, built from `/home/deck/kernel-frl/build72` (branch `frl-723`). The work up to 2026-08-08 was done on **7.2-rc6** (`7.2.0-rc6-frlprobe`), rebased onto **7.2 final** on 21 August (`7.2.0-frlprobe`), onto **7.2.2** on 29 August, and onto **7.2.3** on 6 September. The measurements below were taken on rc6 and no rebase has changed the result. Where an rc6 detail is load-bearing - a source line number, a measurement, a thing checked at the time - it is still named as rc6 on purpose.
+>
+> **It spent 2026-08-29 to 2026-09-06 running 7.2.0 without anyone noticing**, because the 7.2.2 build was never cached and a SteamOS update restored the tarball instead. That is what [Caching only what has booted](#caching-only-what-has-booted-2026-09-06) exists to stop.
 >
 > **Stable point releases are not in Linus's tree.** `git fetch torvalds tag v7.2.2` fails with `couldn't find remote ref` - 7.2.x lives in the *stable* tree, and the repo needs a second remote for it:
 >
@@ -38,13 +40,13 @@ Everything below this section is the reasoning. If you just want it working:
 All commands below are run from `hardware/kernel/` in this repo.
 
 1. **Get the sources** - Valve's kernel source package (for its config), plus `v7.2.2` fetched into the same git repo from the **stable** remote, not `torvalds`. [Commands](#1-get-valves-source-tree).
-2. **Apply the patches** - all five, in order, are in [patches/](patches/):
+2. **Apply the patches** - all eight, in order, are in [patches/](patches/):
    ```bash
    cd /home/deck/kernel-frl/build72
    git checkout -b frl v7.2.2
    git am /home/deck/git/steam-machine/hardware/kernel/patches/*.patch
    ```
-   `0001` keeps gamescope's HDR offload working on a non-Valve kernel - take it regardless. `0002`-`0005` are AMD's unmerged VRR/ALLM series; skip them and you get 120 Hz without VRR.
+   `0001` keeps gamescope's HDR offload working on a non-Valve kernel - take it regardless. `0002`-`0005` are AMD's unmerged VRR/ALLM series; skip them and you get 120 Hz without VRR. `0006` keeps the FRL cap across a hotplug. `0007`-`0008` are Valve's 2026 Steam Controller support, backported because mainline does not have it.
 3. **Build it** in a container - the rootfs is read-only and has no `bc`/`flex`/`bison`. Seed the config from Valve's so you keep what SteamOS depends on. ~25 min on a 9800X3D. [Full steps](#3-config-and-build):
    ```bash
    cd /home/deck/kernel-frl
@@ -62,12 +64,13 @@ All commands below are run from `hardware/kernel/` in this repo.
    ```
    Note what this does *not* do: it does not touch the cache. **Boot it first, then cache it** - `--cache` snapshots what is installed, so caching a kernel you have not booted stores an untested one and schedules it to deploy itself at the next OS update. That is exactly how this machine lost its kernel on 2026-08-28; see [The cache is the kernel](#the-cache-is-the-kernel-and-it-can-drift-silently).
 6. **Reboot.** A 10-second menu appears with the FRL entry preselected. The stock Valve kernel is one arrow-key up, and GRUB falls back to it automatically if the FRL entry cannot load - so a bad build costs you a reboot, not a lockout. That safety is built into `install.sh`; you do not configure it.
-7. **Check it, then cache it:**
+7. **Check it. The caching happens on its own:**
    ```bash
    sudo ./install.sh --status
-   sudo ./install.sh --cache     # only now: pack the kernel you have just proven boots
    ```
    Every component line should read `yes`, and `grub.cfg is stock : yes`. The link-state block only appears when you are running the FRL kernel: `HPO` populated with `ACTIVE` and your horizontal resolution means the native FRL path is carrying the link, and `vrr_range` should show your display's own VRR range rather than `Min: 0 Max: 0` (this TV reports `40`-`120`).
+
+   Ten minutes after the boot, `steam-machine-kernel-confirm.timer` caches the kernel for you - but only if this boot is running it and reached a graphical session with the out-of-tree modules loaded. `cached build` and `running build` in `--status` then agree. That gate exists because "remember to run `--cache` afterwards" failed twice, most recently on 2026-09-06: see [Caching only what has booted](#caching-only-what-has-booted-2026-09-06). To do it immediately and unconditionally instead, `sudo ./install.sh --cache` still works.
 
 **The one non-obvious setting:** the kernel parameter is `amdgpu.dcfeaturemask=0x402`, not the `dc_feature_mask=0x400` every guide on the web quotes. Both halves of that matter - [why](#two-traps-in-the-widely-quoted-incantation). `install.sh` puts it on the FRL boot entry for you.
 
@@ -228,12 +231,13 @@ Install into `/usr/lib/modules/<kver>/updates/` and `depmod`, matching where [ha
 ```bash
 sudo ./install.sh --install-build  # install a freshly built kernel from the build tree
 sudo ./install.sh --cache          # snapshot the INSTALLED kernel + modules into /home
+sudo ./install.sh --confirm        # ...but only if this boot proved the kernel works (timer runs it)
 sudo ./install.sh                  # deploy from the cache and make it the default boot entry
 sudo ./install.sh --status         # what is installed, the live FRL link state, cache freshness
 sudo ./install.sh --uninstall      # remove everything, back to stock
 ```
 
-The order matters and it is **build → `--install-build` → reboot → `--cache`**. `--cache` snapshots the **installed** kernel image at `/boot/frl/vmlinuz-linux-frlprobe` together with the **installed** module tree at `/usr/lib/modules/<kver>`, and writes a **172 MB** tarball to `/home/deck/.cache/frl-kernel/`. It reads the version out of the bzImage header rather than trusting a path, and warns when the build tree at `/home/deck/kernel-frl/build72` (override with `FRL_BUILD_TREE`) holds a different kernel from the installed one.
+The order matters and it is **build → `--install-build` → reboot → cache**. Since 2026-09-06 the last step is `--confirm`, run for you by a timer 10 minutes into a boot that reached the GUI on the new kernel, rather than a `--cache` you have to remember - see [Caching only what has booted](#caching-only-what-has-booted-2026-09-06). `--cache` still does it immediately and unconditionally. `--cache` snapshots the **installed** kernel image at `/boot/frl/vmlinuz-linux-frlprobe` together with the **installed** module tree at `/usr/lib/modules/<kver>`, and writes a **172 MB** tarball to `/home/deck/.cache/frl-kernel/`. It reads the version out of the bzImage header rather than trusting a path, and warns when the build tree at `/home/deck/kernel-frl/build72` (override with `FRL_BUILD_TREE`) holds a different kernel from the installed one.
 
 It did not always do that: until 2026-08-28 it took the image from the build tree and the modules from `/usr/lib/modules`, which let a rebuild that was never installed get packed next to the previous build's modules. Same release string, so nothing could tell - until the restore after an OS update hung at the boot splash.
 
@@ -245,10 +249,12 @@ That tarball is the only part of this that survives a SteamOS A/B update - `/boo
 | ----------------------------------------------------- | ----------------------------------------------- | ------------------------ |
 | `/boot/frl/vmlinuz-linux-frlprobe`                    | the kernel                                      | no - restored from cache |
 | `/boot/frl/initramfs-linux-frlprobe{,-fallback}.img`  | generated by mkinitcpio                         | no - regenerated         |
-| `/usr/lib/modules/7.2.2-frlprobe/`                    | modules, incl. `updates/{it87,btusb_mt7902}.ko` | no - restored from cache |
+| `/usr/lib/modules/7.2.3-frlprobe/`                    | modules, incl. `updates/{it87,btusb_mt7902}.ko` | no - restored from cache |
 | `/etc/mkinitcpio.d/linux-frlprobe.preset`             | so mkinitcpio knows about it                    | no - rewritten           |
 | `/efi/EFI/steamos/custom.cfg`                         | menu timeout, the FRL entry, and `set default`  | no - regenerated         |
 | `/etc/systemd/system/steam-machine-kernel.service`    | runs `--boot` at every boot                     | **yes** - keep-listed    |
+| `/etc/systemd/system/steam-machine-kernel-confirm.timer`   | caches the kernel after a boot that worked | **yes** - keep-listed, and `*.timer` is *not* on Valve's default list |
+| `/etc/systemd/system/steam-machine-kernel-confirm.service` | what the timer runs                        | **yes** - keep-listed    |
 | `/etc/atomic-update.conf.d/steam-machine-kernel.conf` | the allowlist entry itself                      | **yes**                  |
 
 Everything authoritative is under `/home`: this repo, plus the cache tarball. The 40 GB source and build tree in `/home/deck/kernel-frl/` are only needed to build a *new* kernel - deleting them costs nothing but a re-download.
@@ -510,7 +516,7 @@ Expect real work: `dc/dml2` was renamed to `dc/dml2_0` in 6.19, and there are ro
 
 ### Rebasing onto a new stable release
 
-Done for 7.2 → 7.2.2 on 2026-08-29. About 40 minutes end to end, most of it the ~25 minute compile. The whole procedure:
+Done for 7.2 → 7.2.2 on 2026-08-29, and 7.2.2 → 7.2.3 on 2026-09-06. About 40 minutes end to end, most of it the ~25 minute compile. The whole procedure:
 
 ```bash
 cd /home/deck/kernel-frl/build72
@@ -536,6 +542,21 @@ podman run --rm -v $PWD:/work -w /work/build72 localhost/kbuild:arch \
 # 4. Out-of-tree modules against the new KVER, then install, boot, and only
 #    then cache.
 ```
+
+A `git rebase --onto` off the previous branch is the quicker variant of step 2 once the patches are already commits, and is what 7.2.3 used - it keeps the old branch as the record without re-running `git am`:
+
+```bash
+git checkout -b frl-723 frl-722
+git rebase --onto v7.2.3 v7.2.2
+```
+
+The cheapest way to know in advance whether a bump can conflict is to ask git rather than to read release notes - if the range touches none of the files the patches touch, it cannot:
+
+```bash
+git log --oneline v7.2.2..v7.2.3 -- drivers/gpu/drm/amd drivers/gpu/drm/drm_edid.c drivers/hid
+```
+
+Empty for 7.2.3 (72 commits in the range, none in those paths), and all eight patches rebased clean.
 
 **Before starting, read the changelogs rather than assuming the patches still apply.** For 7.2.1 and 7.2.2, grepping both for `amdgpu`, `drm/amd`, `hid-steam` and `mt76` returned nothing, so none of the eight patches could have been upstreamed or conflicted - and none were. 7.2.1 is 83 fixes (Bluetooth core, HID, NFC, io_uring, futex, filesystems); 7.2.2 is a single one, `inet: frags: strip GSO state from fragments before reassembly`, an unprivileged local panic in `skb_segment()`. Nothing display-, GPU- or shutdown-related in either, so **a stable bump was never going to fix the power-off hang** - the `mt7921e` blacklist and the shutdown VT switch are both still required.
 
@@ -609,6 +630,37 @@ The restore died mid-`tar` with a `vmlinuz` in place and no modules, no initramf
 **2. A cached pair that was never a pair.** `build_cache()` took the image from `$BUILD_TREE/arch/x86/boot/bzImage` while taking the modules from `/usr/lib/modules`. The 8 August pstore rebuild left the build tree ahead of what was installed, so the tarball ended up holding an 8 August bzImage next to 6 August modules. `CONFIG_LOCALVERSION` is unchanged across rebuilds, so both report `7.2.0-rc6-frlprobe`, `modprobe` raises nothing, and the mismatch only shows as a **hang at the boot splash with no journal at all** - the same failure `do_install()` already warns about for the vmlinuz/modules pair, arriving by a different route.
 
 Fixed 2026-08-28: `--cache` now reads the version out of the bzImage header with `file`, packs the **installed** image with the **installed** modules, and warns when the build tree has moved ahead of what is installed. The rule that follows: **after any rebuild, install it, boot it, then `--cache` it** - in that order. A cache entry that has never booted is not a backup, it is an untested kernel scheduled to deploy itself unattended.
+
+**That rule is now enforced by the machine rather than by memory** - see [Caching only what has booted](#caching-only-what-has-booted-2026-09-06). It had to be: the fix above stopped the cache from holding an *incoherent* kernel, but it did nothing about the far more ordinary failure of simply never running `--cache`, which is what happened again on 2026-09-06.
+
+### Caching only what has booted (2026-09-06)
+
+`steam-machine-kernel-confirm.timer` fires 10 minutes after every boot and runs `install.sh --confirm`, which caches the installed kernel **only** if this boot is running it and has reached a graphical session. Step 7 of the TL;DR is now a fallback for the impatient rather than something the machine depends on you remembering.
+
+Why it exists: the 21 August rebase to 7.2.2 was built, installed and booted, and `--cache` was never run. Nothing was wrong for nine days. Then the 6 September SteamOS update wiped the slot, the self-heal restored the tarball it had - **7.2.0, from 21 August** - and the machine came back two point releases behind, with the FRL boot entry gone for one boot on top. The failure has no symptom until an OS update, by which time the reason is a fortnight in the past.
+
+What `--confirm` checks, in order, and refuses to cache on any of:
+
+1. **An FRL kernel is installed at all.** Nothing to confirm otherwise.
+2. **This boot is running that exact build.** Not the release string - the build. See below.
+3. **The cache does not already hold it.** Makes every fire after the first a sub-second no-op.
+4. **A graphical session is live**, asked of logind (`Class=user`, `State=active`, `Seat=seat0`, `Type=wayland` or `x11`), which is true in both Game Mode and Desktop Mode and needs no list of compositor process names.
+5. **The out-of-tree modules are built against this kernel** - `it87` and `btusb_mt7902`. These are the ones that fail silently (README step 4), and caching a kernel without them redeploys a machine with no sensors and no Bluetooth at every future OS update. *Built* is the gate, because that is what decides the tarball's contents; *loaded* only warns, because it is a runtime condition with unrelated causes (`it87` needs the sensors subsystem's `modprobe.d`, `btusb_mt7902` needs the radio unblocked) and blocking on it would wedge caching permanently and invisibly.
+
+Check 2 is the load-bearing one, and it needs more than `uname -r`. `CONFIG_LOCALVERSION` is fixed at `-frlprobe`, so every build out of the same tree reports the same release - which is precisely how the mismatched pair of 2026-08-28 got cached. `--confirm` compares release **plus the link counter** (`7.2.3-frlprobe #1`), taken from `/proc/version` for the running kernel and from `file(1)` for the installed image; the counter increments on every relink, so a rebuild is visible. `--status` prints both:
+
+```
+cached build       : 7.2.3-frlprobe #1
+running build      : 7.2.3-frlprobe #1
+```
+
+Divergence there means the next SteamOS update will replace what you are running with what is on the left.
+
+Everything short of caching exits 0 and the timer re-fires every 30 minutes, because a boot that has not earned a cache entry - the TV was off, you booted the stock kernel deliberately - is a normal state. A failed unit here would be indistinguishable from one that means something.
+
+**The timer needs its own keep-list entry.** Valve's default `atomic-update-keep.conf` covers `/etc/systemd/system/*.service`, `*.socket` and `*.mount` - **not `*.timer`**. `*.wants/**` *is* covered, so an OS update would otherwise delete the timer while preserving the symlink that makes it look enabled, and the automatic caching would stop happening silently. Both the unit and the symlink are listed in [`atomic-update.conf.d/steam-machine-kernel.conf`](atomic-update.conf.d/steam-machine-kernel.conf), and `--boot` restores the pair by content before its fast path.
+
+`--cache` is unchanged and remains the manual override: it caches whatever is installed, no questions asked, for the case where one of the checks above is wrong about your intent.
 
 Worth knowing about the recovery, too: after two failed boots SteamOS fell back to the **other A/B slot**, which still held the 6 August kernel and the pre-update image, and booted it. That is why the machine stayed usable. `findmnt -no SOURCE /` tells you which slot you are on; the GRUB menu label does not.
 

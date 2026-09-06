@@ -9,6 +9,9 @@
 #   ./install.sh --uninstall
 #   ./install.sh --cache    save the INSTALLED kernel and modules into the
 #                           cache tarball on /home
+#   ./install.sh --confirm  cache the installed kernel, but ONLY if this boot
+#                           is running it and has reached a graphical session;
+#                           run from steam-machine-kernel-confirm.timer
 #   ./install.sh --install-build [modules-dir]
 #                           install the kernel sitting in the BUILD TREE, so
 #                           there is something to boot and then --cache
@@ -53,6 +56,12 @@ CACHE_DIR="${FRL_KERNEL_CACHE:-/home/deck/.cache/frl-kernel}"
 BUILD_TREE="${FRL_BUILD_TREE:-/home/deck/kernel-frl/build72}"
 
 KVER_FILE="$CACHE_DIR/kver"
+# Serialises the paths that mutate the installed kernel against the one that
+# packs it. See kernel_lock().
+KERNEL_LOCK="$CACHE_DIR/.install.lock"
+# Which BUILD the cache holds, as opposed to which release string. See
+# build_id_of_image() for why the release alone is not enough.
+BUILDID_FILE="$CACHE_DIR/buildid"
 BOOT_SUBDIR="/boot/frl"
 PRESET_DEST="/etc/mkinitcpio.d/linux-frlprobe.preset"
 SERVICE_DEST="/etc/systemd/system/steam-machine-kernel.service"
@@ -70,6 +79,14 @@ MODPROBE_DEST="/etc/modprobe.d/mt7902-wifi.conf"
 # while the Gamescope session still owns the display hangs -- see README.md.
 VT_UNIT="steam-machine-shutdown-vt.service"
 VT_DEST="/etc/systemd/system/$VT_UNIT"
+# Caches the kernel only after a boot that reached the GUI on it. The .timer is
+# the enabled half; the .service has no [Install] and is started by nothing
+# else. The timer needs an atomic-update entry that the other units do not --
+# see atomic-update.conf.d/steam-machine-kernel.conf for why.
+CONFIRM_UNIT="steam-machine-kernel-confirm.service"
+CONFIRM_TIMER="steam-machine-kernel-confirm.timer"
+CONFIRM_DEST="/etc/systemd/system/$CONFIRM_UNIT"
+CONFIRM_TIMER_DEST="/etc/systemd/system/$CONFIRM_TIMER"
 
 MENU_ID="frl-probe"
 
@@ -112,6 +129,123 @@ kver_of_image() {
     [[ $out == *"bzImage, version "* ]] || return 1
     out=${out#*bzImage, version }
     printf '%s\n' "${out%% *}"
+}
+
+# Identity of a kernel BUILD rather than of a kernel release.
+#
+# CONFIG_LOCALVERSION is fixed at "-frlprobe", so every build out of the same
+# tree reports the same release string and kver_of_image() cannot tell a rebuilt
+# kernel from the installed one. That is exactly the drift that cost the machine
+# its kernel on 2026-08-28. The link counter (`#N`) in the banner increments on
+# every relink, so release + #N does distinguish them.
+#
+# It is not a hash -- two builds from two different trees could in principle
+# collide on both -- but it is the only identity the RUNNING kernel exposes,
+# and matching the running kernel against an installed image is the whole point.
+# /proc/version and file(1) print the same two fields in the same order:
+#
+#   /proc/version  Linux version 7.2.0-frlprobe (root@...) (gcc ...) #10 SMP ...
+#   file(1)        ... bzImage, version 7.2.0-frlprobe (root@...) #10 SMP ...
+#
+# Note the compiler string, which only /proc/version carries: that is why this
+# picks two fields out rather than comparing the banners whole.
+_build_id_from_banner() {
+    local v="$1" rel num
+    rel="${v%% *}"
+    [[ $v == *"#"* ]] || return 1
+    num="${v#*\#}"
+    num="${num%% *}"
+    [[ -n $rel && -n $num ]] || return 1
+    printf '%s #%s\n' "$rel" "$num"
+}
+
+build_id_of_image() {
+    local out
+    out="$(file -b "$1" 2>/dev/null)" || return 1
+    [[ $out == *"bzImage, version "* ]] || return 1
+    _build_id_from_banner "${out#*bzImage, version }"
+}
+
+build_id_running() {
+    local v
+    v="$(< /proc/version)" || return 1
+    [[ $v == "Linux version "* ]] || return 1
+    _build_id_from_banner "${v#Linux version }"
+}
+
+cached_build_id() { [[ -f $BUILDID_FILE ]] && cat "$BUILDID_FILE"; }
+
+# --- serialising the installed kernel against the thing that packs it ---------
+
+# Everything that MUTATES the installed kernel takes this lock, and so does
+# build_cache. Until --confirm existed the two could not overlap, because both
+# were things a human ran one after the other; a timer changed that.
+#
+# The window is real and it is wide. do_install_build() replaces the module tree
+# first and copies the vmlinuz LAST, so for the ~30 s of a 180 MB `cp -a` plus
+# depmod the installed image is the OLD build sitting next to the NEW modules.
+# --confirm compares /proc/version against the image alone, so mid-window it
+# sees running == installed, passes every other gate, and packs exactly the
+# mismatched pair that cost the machine its kernel on 2026-08-28 -- into the
+# only copy that survives an A/B update. deploy_kernel() has the same shape.
+#
+# The lock lives in the cache directory rather than /run because both ends of it
+# already require that directory to exist, and because it must work identically
+# from a systemd unit and from an interactive shell.
+# ALWAYS call this AFTER need_root, never before. need_root re-runs the whole
+# script under sudo (lib/elevate.sh), and the child inherits the parent's open
+# file descriptors: a lock taken first would be held by the unprivileged parent
+# while the root child blocked on it forever. That is the class of hang this
+# repo's CLAUDE.md exists to prevent.
+# Acquire and release, NOT a `with_lock <body>` wrapper.
+#
+# The wrapper spelling is the obvious one and it is wrong here. Running the body
+# as `"$@" || rc=$?` puts it on the left of `||`, which switches `set -e` OFF for
+# that function and everything it calls -- so a half-finished `cp -a` of the
+# module tree would no longer abort do_install_build, and it would go on to
+# install the new vmlinuz beside the old modules and rewrite custom.cfg. That is
+# precisely the mismatched pair this whole subsystem exists to keep out of the
+# cache, manufactured by the thing meant to protect it. It also silently kills
+# the `set -e` guards those bodies were written around -- custom_cfg_installed()
+# relies on one (see its comment) to avoid `grep -q ""` matching anything.
+#
+# Called as plain statements instead, errexit applies normally. A `die` in the
+# body exits the process, and the kernel releases the flock on exit, so nothing
+# leaks.
+KERNEL_LOCK_FD=
+
+# ALWAYS call this AFTER need_root, never before. need_root re-runs the whole
+# script under sudo (lib/elevate.sh), and the child inherits the parent's open
+# file descriptors: a lock taken first would be held by the unprivileged parent
+# while the root child blocked on it forever. That is the class of hang this
+# repo's CLAUDE.md exists to prevent.
+kernel_lock() {
+    local mode="${1:-wait}"   # 'wait' for mutators, 'try' for the timer
+    mkdir -p "$CACHE_DIR"
+    exec {KERNEL_LOCK_FD}<>"$KERNEL_LOCK"
+    if [[ $mode == try ]]; then
+        # Non-blocking on purpose: an install in progress means this boot has
+        # not finished becoming what it will be, so there is nothing honest to
+        # cache yet. The timer comes back in 30 minutes. Returns 1, which the
+        # caller turns into a clean exit 0 -- this is not a failure.
+        if flock -n "$KERNEL_LOCK_FD"; then return 0; fi
+        exec {KERNEL_LOCK_FD}>&-
+        KERNEL_LOCK_FD=
+        log "another install.sh holds the kernel lock -- will retry"
+        return 1
+    fi
+    # Bounded, not indefinite. Nothing legitimately holds this for more than
+    # about a minute (a 180 MB pack, or an install), and the boot unit that
+    # takes it has TimeoutStartSec=600 -- so failing at 300 s leaves room to
+    # report the failure properly instead of being killed mid-restore.
+    flock -w 300 "$KERNEL_LOCK_FD" \
+        || die "timed out waiting for the kernel lock at $KERNEL_LOCK -- another install.sh is stuck; check with: fuser -v $KERNEL_LOCK"
+}
+
+kernel_unlock() {
+    [[ -n ${KERNEL_LOCK_FD:-} ]] || return 0
+    exec {KERNEL_LOCK_FD}>&-
+    KERNEL_LOCK_FD=
 }
 
 # --- state --------------------------------------------------------------------
@@ -158,9 +292,18 @@ custom_cfg_installed() {
 #
 # So the version now comes out of the image header, and the build tree is only
 # consulted to warn that it has moved ahead of what is installed.
+# Split in two because flock is per open-file-description: do_confirm already
+# holds the lock when it calls this, and a nested kernel_lock would open the
+# file a second time and block on itself. The public entry point takes the
+# lock; the _locked body assumes it is held.
 build_cache() {
-    need_root
+    need_root --cache
+    kernel_lock wait
+    _build_cache_locked
+    kernel_unlock
+}
 
+_build_cache_locked() {
     local img="$BOOT_SUBDIR/vmlinuz-linux-frlprobe"
     [[ -f $img ]] || die "no installed kernel at $img -- run a full install first"
 
@@ -182,7 +325,19 @@ build_cache() {
 
     local stage
     stage="$(mktemp -d)"
-    trap 'rm -rf "$stage"' RETURN
+    # A RETURN trap set inside a function STAYS INSTALLED after that function
+    # returns, and fires again for the next function that returns -- by which
+    # point bash has popped these locals, so `rm -rf "$stage"` hits `set -u` and
+    # kills the script with "unbound variable". hardware/rgb/install.sh:89
+    # records the same lesson.
+    #
+    # Latent while this body was called straight from the dispatch and nothing
+    # returned after it. Live the moment it moved behind kernel_lock: the
+    # pack SUCCEEDS, then the wrapper returns, the trap re-fires, and --cache
+    # exits 1 having done its job perfectly -- marking the confirm unit failed
+    # for a cache that is correct. Guarded expansion, and the trap disarms
+    # itself as its own last act so it cannot fire a second time.
+    trap '[[ -n ${stage:-} ]] && rm -rf "$stage"; trap - RETURN' RETURN
 
     mkdir -p "$stage/boot" "$stage/usr/lib/modules"
     cp "$img" "$stage/boot/vmlinuz-linux-frlprobe"
@@ -193,12 +348,176 @@ build_cache() {
 
     # -3, not -19: the modules are already individually zstd-compressed, so a
     # high level costs minutes and saves almost nothing.
-    tar -C "$stage" -c boot usr | zstd -q -T0 -3 > "$CACHE_DIR/kernel.tar.zst.new"
+    # The partial file is cleaned up on failure. `set -o pipefail` aborts the
+    # whole script if either half of this pipe fails, and the RETURN trap above
+    # does not fire on a `set -e` abort -- so without this an out-of-space run
+    # leaves ~180 MB of .new sitting in the cache directory forever, on the
+    # filesystem that just ran out of space.
+    if ! { tar -C "$stage" -c boot usr | zstd -q -T0 -3 > "$CACHE_DIR/kernel.tar.zst.new"; }; then
+        # Both the partial tarball and the staging tree, explicitly: die() exits
+        # the script, so the RETURN trap above never fires on this path.
+        rm -f "$CACHE_DIR/kernel.tar.zst.new"
+        rm -rf "$stage"
+        die "packing $kver failed (out of space on /home?) -- the existing cache is untouched"
+    fi
     mv "$CACHE_DIR/kernel.tar.zst.new" "$CACHE_DIR/kernel.tar.zst"
     echo "$kver" > "$KVER_FILE"
+    # Written after the tarball is in place, so an interrupted pack leaves the
+    # build id pointing at the previous contents rather than claiming the new
+    # one. --confirm compares against this to decide it has nothing to do; a
+    # missing or stale value costs one redundant re-pack, never a wrong cache.
+    build_id_of_image "$img" > "$BUILDID_FILE" || rm -f "$BUILDID_FILE"
 
     chown -R deck:deck "$CACHE_DIR"
     log "cached $(du -h "$CACHE_DIR/kernel.tar.zst" | cut -f1) at $CACHE_DIR"
+}
+
+# --- confirm ------------------------------------------------------------------
+
+# Is somebody actually looking at a desktop or a game?
+#
+# Asked of logind rather than of a process list, because this machine has two
+# entirely different graphical stacks -- gamescope in Game Mode, KWin in Desktop
+# Mode -- and pgrep for both is a list that goes stale the first time Valve
+# renames something. A seat0 session that logind calls active, of type wayland
+# or x11, is true for both and needs no updating.
+#
+# Class=user excludes the `manager` session systemd opens for the user's own
+# unit tree, which exists whether or not anything is on screen.
+gui_is_up() {
+    local s props
+    while read -r s; do
+        [[ -n $s ]] || continue
+        props="$(loginctl show-session "$s" -p Class -p Type -p State -p Seat 2>/dev/null)" || continue
+        [[ $props == *"Class=user"*   ]] || continue
+        [[ $props == *"State=active"* ]] || continue
+        [[ $props == *"Seat=seat0"*   ]] || continue
+        [[ $props == *"Type=wayland"* || $props == *"Type=x11"* ]] || continue
+        return 0
+    done < <(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}')
+
+    # Fallback, and the reason it exists: the logind test above is VERIFIED in
+    # Desktop Mode (session type wayland, seat0, active) and only assumed in
+    # Game Mode, which is how this machine actually spends its life. If
+    # gamescope's session registers with a different Type or no seat, the test
+    # above silently never passes and the cache never updates -- a failure with
+    # no symptom until the next OS update, which is the whole thing this
+    # mechanism exists to prevent.
+    #
+    # So: one named process, checked only after the general test has failed. It
+    # is a compositor holding the display, which is the question being asked.
+    # If this is what ends up firing, fix the test above rather than adding a
+    # second name here.
+    pgrep -x gamescope >/dev/null 2>&1
+}
+
+# The out-of-tree modules are the ones nobody notices are missing. it87 is every
+# fan and temperature sensor on this board; btusb_mt7902 is Bluetooth, so losing
+# it means no controllers. Both have to be rebuilt by hand against each new
+# kernel (README step 4) and both fail silently when they were not -- the kernel
+# boots, the GUI comes up, and the machine simply has no sensors.
+#
+# So they gate the cache instead of warning about it: a kernel cached without
+# them is a kernel that redeploys itself, without them, at every future SteamOS
+# update. `--cache` remains the override -- it caches whatever is installed, no
+# questions asked -- for the case where one of them is genuinely not wanted.
+# Gates on whether the modules are BUILT, and only warns about whether they are
+# LOADED. The two look alike and are not:
+#
+#   built   -- decides what goes into the tarball, which is the only thing this
+#              function is here to protect. A kernel cached without them
+#              redeploys a machine with no sensors and no Bluetooth at every
+#              future OS update.
+#   loaded  -- a runtime condition with causes that have nothing to do with the
+#              cache: it87 needs the sensors subsystem's modprobe.d (not on
+#              Valve's keep list), btusb_mt7902 needs the radio present and not
+#              rfkill-blocked. Blocking on it would wedge caching permanently
+#              and invisibly -- exit 0 every 30 minutes, no failed unit, and the
+#              reason only in the journal.
+#
+# The warning still goes out, because a module that is built and not loaded is
+# usually something else being broken.
+confirm_oot_modules() {
+    local kver="$1" m unbuilt=()
+    for m in it87 btusb_mt7902; do
+        if ! compgen -G "/usr/lib/modules/$kver/updates/$m.ko*" >/dev/null; then
+            unbuilt+=("$m")
+        elif ! grep -q "^$m " /proc/modules; then
+            warn "$m is built against $kver but not loaded -- caching anyway, but something is wrong"
+        fi
+    done
+    [[ ${#unbuilt[@]} -eq 0 ]] && return 0
+    for m in "${unbuilt[@]}"; do warn "$m: not built against $kver"; done
+    return 1
+}
+
+# Cache the installed kernel, but only on the evidence of a boot that worked.
+#
+# This exists because the documented flow -- install, reboot, check, then
+# --cache -- has a step that depends on a human remembering it days later, and
+# the cost of forgetting is silent: the machine keeps running the new kernel
+# until the next SteamOS update swaps the rootfs, at which point --boot restores
+# whatever the cache still holds and the new kernel is gone. That is how the
+# machine arrived on 7.2.0 on 2026-09-06 having been rebased to 7.2.2.
+#
+# Every exit short of caching is exit 0. The timer re-fires, and a boot that has
+# not earned a cache entry is a normal state, not a failure -- a failed unit
+# here would be indistinguishable from the ones that mean something.
+do_confirm() {
+    need_root --confirm
+    # `try`, not `wait`: if an install is running, this boot has not finished
+    # becoming what it will be and there is nothing honest to cache yet. Taking
+    # the lock around the CHECKS as well as the pack is the point -- checking
+    # outside it and packing inside would re-open the same window.
+    #
+    # The `|| return 0` is on kernel_lock alone, never on the body: putting the
+    # body on the left of `||` would disable `set -e` inside it.
+    kernel_lock try || return 0
+    _confirm_locked
+    kernel_unlock
+}
+
+_confirm_locked() {
+    local img="$BOOT_SUBDIR/vmlinuz-linux-frlprobe"
+    [[ -f $img ]] || { log "no FRL kernel installed -- nothing to confirm"; return 0; }
+
+    local installed running
+    installed="$(build_id_of_image "$img")" \
+        || { warn "cannot read a build id out of $img -- not caching"; return 0; }
+    running="$(build_id_running)" \
+        || { warn "cannot read a build id out of /proc/version -- not caching"; return 0; }
+
+    # The load-bearing check. Running the stock Valve kernel means either this
+    # boot never tried the FRL entry or GRUB's fallback caught a broken one --
+    # and in the second case the installed image is precisely the thing that
+    # must NOT be cached.
+    if [[ $running != "$installed" ]]; then
+        log "running '$running', installed FRL kernel is '$installed' -- not this boot's kernel, nothing to confirm"
+        return 0
+    fi
+
+    if [[ -f "$CACHE_DIR/kernel.tar.zst" && "$(cached_build_id || true)" == "$installed" ]]; then
+        log "cache already holds '$installed' -- nothing to do"
+        return 0
+    fi
+
+    if ! gui_is_up; then
+        log "no active graphical session yet -- leaving the cache alone, will retry"
+        return 0
+    fi
+
+    if ! confirm_oot_modules "$(uname -r)"; then
+        warn "out-of-tree modules missing -- refusing to cache '$installed'"
+        warn "rebuild them (README step 4), then: sudo $0 --cache"
+        return 0
+    fi
+
+    log "'$installed' booted to a graphical session -- caching it"
+    # The lock is already held, so the _locked body directly. A genuine pack
+    # failure (no space on /home) is the ONE case that fails this unit rather
+    # than exiting 0: it leaves the cache holding a kernel that is no longer the
+    # one running, which is exactly the drift worth a red `systemctl status`.
+    _build_cache_locked
 }
 
 # --- install ------------------------------------------------------------------
@@ -298,15 +617,28 @@ install_service() {
     install -Dm644 "$REPO_DIR/atomic-update.conf.d/steam-machine-kernel.conf" "$KEEP_DEST"
     install -Dm644 "$REPO_DIR/modprobe.d/mt7902-wifi.conf" "$MODPROBE_DEST"
     install -Dm644 "$REPO_DIR/systemd/$VT_UNIT" "$VT_DEST"
+    install -Dm644 "$REPO_DIR/systemd/$CONFIRM_UNIT" "$CONFIRM_DEST"
+    install -Dm644 "$REPO_DIR/systemd/$CONFIRM_TIMER" "$CONFIRM_TIMER_DEST"
     systemctl daemon-reload
     systemctl enable steam-machine-kernel.service >/dev/null 2>&1 \
         || warn "could not enable steam-machine-kernel.service"
     systemctl enable "$VT_UNIT" >/dev/null 2>&1 \
         || warn "could not enable $VT_UNIT -- power-off may hang"
+    # The timer, not the service: the service has no [Install] on purpose.
+    # Failing to enable it costs the automatic cache, nothing else, so it warns
+    # rather than dying -- the manual `--cache` still works.
+    systemctl enable "$CONFIRM_TIMER" >/dev/null 2>&1 \
+        || warn "could not enable $CONFIRM_TIMER -- caching stays manual (--cache)"
 }
 
 do_install() {
-    need_root
+    need_root --install
+    kernel_lock wait
+    _do_install_locked
+    kernel_unlock
+}
+
+_do_install_locked() {
     local kver
     kver="$(cached_kver)" || true
     [[ -n ${kver:-} ]] || die "no cached kernel; run './install.sh --cache' first"
@@ -335,8 +667,22 @@ do_install() {
 # Boot-time self-heal. Runs before any fast-path exit so a SteamOS update that
 # wiped the rootfs and the EFI partition is repaired on the next boot.
 do_boot() {
-    need_root
+    need_root --boot
+    # The /etc self-heal runs BEFORE the lock is even acquired.
+    #
+    # It writes only /etc -- the mt7921e blacklist, the shutdown VT unit, the
+    # confirm pair, the keep list -- touches no kernel state, and so needs no
+    # serialisation. Putting it ahead of kernel_lock keeps the promise its own
+    # comment makes ("ahead of every early return"): a lock that cannot be
+    # opened, or that times out at 300 s, must not be able to leave the mt7921e
+    # blacklist unrestored, because that is a power-off that never completes.
+    _boot_etc_selfheal
+    kernel_lock wait
+    _boot_restore_kernel
+    kernel_unlock
+}
 
+_boot_etc_selfheal() {
     # First, and deliberately ahead of every early return below.
     #
     # /etc/modprobe.d is not on SteamOS's keep list, so an A/B update deletes
@@ -370,6 +716,59 @@ do_boot() {
         || systemctl enable "$VT_UNIT" >/dev/null 2>&1 \
         || warn "could not enable $VT_UNIT -- power-off may hang"
 
+    # The confirm pair, restored ahead of the cached-kernel fast path for the
+    # same reason as the two above: it has to come back even on a boot where
+    # everything else was already intact. The .timer is the one that genuinely
+    # needs it -- see atomic-update.conf.d/steam-machine-kernel.conf.
+    local u dest reloaded=0
+    for u in "$CONFIRM_UNIT" "$CONFIRM_TIMER"; do
+        dest="/etc/systemd/system/$u"
+        if [[ -f "$REPO_DIR/systemd/$u" ]] && ! cmp -s "$REPO_DIR/systemd/$u" "$dest"; then
+            install -Dm644 "$REPO_DIR/systemd/$u" "$dest" \
+                && { log "restored $dest"; reloaded=1; } \
+                || warn "could not restore $dest -- the kernel cache will not update itself"
+        fi
+    done
+    # The atomic-update entry, by CONTENT and not merely by existence.
+    #
+    # The fast path below only tests `-f $KEEP_DEST`, so editing the keep list
+    # in the repo -- adding a newly-installed file to it, say -- would never
+    # reach /etc on a machine where the old copy is still sitting there. The
+    # symptom is the worst kind this subsystem has: everything looks installed,
+    # and the newly-listed file disappears at the next OS update anyway.
+    if [[ -f "$REPO_DIR/atomic-update.conf.d/steam-machine-kernel.conf" ]] \
+       && ! cmp -s "$REPO_DIR/atomic-update.conf.d/steam-machine-kernel.conf" "$KEEP_DEST"; then
+        install -Dm644 "$REPO_DIR/atomic-update.conf.d/steam-machine-kernel.conf" "$KEEP_DEST" \
+            && log "restored $KEEP_DEST (keep list)" \
+            || warn "could not restore $KEEP_DEST -- units may not survive an OS update"
+    fi
+
+    if [[ $reloaded -eq 1 ]]; then systemctl daemon-reload; fi
+    systemctl is-enabled --quiet "$CONFIRM_TIMER" 2>/dev/null \
+        || systemctl enable "$CONFIRM_TIMER" >/dev/null 2>&1 \
+        || warn "could not enable $CONFIRM_TIMER -- caching stays manual (--cache)"
+
+    # Enabling only writes the timers.target.wants symlink, and timers.target was
+    # reached long before this unit runs (it is WantedBy=multi-user.target). So a
+    # timer restored here stays INACTIVE for the rest of this boot -- meaning the
+    # exact scenario this self-heal exists for, an A/B update having deleted it,
+    # would still produce no caching until the next reboot. Start it too.
+    #
+    # --no-block is mandatory, not tidiness: this runs inside
+    # steam-machine-kernel.service's own ExecStart, and systemd will not dispatch
+    # the new job while the calling unit's job is still running. A blocking start
+    # here is the deadlock that made the machine unbootable on 2026-09-06 via
+    # hardware/usb/. Keyed on INVOCATION_ID so an interactive `--boot` still gets
+    # a real exit status.
+    local nb=()
+    [[ -n ${INVOCATION_ID:-} ]] && nb=(--no-block)
+    systemctl is-active --quiet "$CONFIRM_TIMER" 2>/dev/null \
+        || systemctl start "${nb[@]}" "$CONFIRM_TIMER" >/dev/null 2>&1 \
+        || warn "could not start $CONFIRM_TIMER -- it will come up at the next boot"
+}
+
+# The half that touches the kernel, and the only half that needs the lock.
+_boot_restore_kernel() {
     local kver
     kver="$(cached_kver)" || true
     if [[ -z ${kver:-} || ! -f "$CACHE_DIR/kernel.tar.zst" ]]; then
@@ -438,6 +837,21 @@ do_status() {
         && echo "yes ($efi/custom.cfg)" \
         || { [[ -f "$efi/custom.cfg" ]] && echo 'STALE -- wrong UUID or no kernel line' || echo NO; }; })"
     echo "boot service       : $(systemctl is-enabled steam-machine-kernel.service 2>/dev/null || echo NO)"
+    echo "confirm timer      : $(systemctl is-enabled "$CONFIRM_TIMER" 2>/dev/null || echo 'NO -- caching is manual')"
+    # The build the cache holds, next to the build that is running. These are
+    # the two values --confirm compares, so printing them makes its decision
+    # legible rather than something you have to read the journal to explain --
+    # and a release string alone cannot show a same-release rebuild drifting.
+    # Three builds, not two, and they answer three different questions:
+    #   installed -- what the FRL boot entry will load at the next reboot
+    #   running   -- what booted this time (the stock kernel, usually, after an
+    #                OS update or a deliberate menu choice)
+    #   cached    -- what a SteamOS A/B update will restore, replacing installed
+    # Printing only two of them hides the state that matters most right after an
+    # --install-build: a new kernel installed but not yet cached.
+    echo "installed build    : $(build_id_of_image "$BOOT_SUBDIR/vmlinuz-linux-frlprobe" 2>/dev/null || echo '<none>')"
+    echo "running build      : $(build_id_running || echo '?')"
+    echo "cached build       : $(cached_build_id || echo '<unknown -- predates build ids; --confirm refreshes it after a boot on the FRL kernel>')"
     # Has anything been installed into the module tree since the cache was
     # built? If so it is NOT protected: a SteamOS update restores the tarball
     # and silently drops it. This caught the hand-installed hid-steam backport.
@@ -512,8 +926,13 @@ do_status() {
 # but their absence is called out, because losing them silently is how a probe
 # boot ends up with no fan readings and no Bluetooth.
 do_install_build() {
-    need_root
+    need_root --install-build "$@"
+    kernel_lock wait
+    _do_install_build_locked "$@"
+    kernel_unlock
+}
 
+_do_install_build_locked() {
     local bz="$BUILD_TREE/arch/x86/boot/bzImage"
     [[ -f $bz ]] || die "no bzImage at $bz (set FRL_BUILD_TREE)"
 
@@ -562,8 +981,10 @@ do_install_build() {
     install_service
 
     log "installed $kver from the build tree"
-    log "NEXT: reboot into it, confirm it works, THEN run: sudo ./install.sh --cache"
-    warn "the cache still holds $(cached_kver || echo '<nothing>') until you do"
+    log "NEXT: reboot into it. steam-machine-kernel-confirm.timer caches it 10 minutes"
+    log "      later, if this boot is running it and reached a graphical session."
+    log "      To do it by hand instead: sudo ./install.sh --cache"
+    warn "the cache still holds $(cached_kver || echo '<nothing>') until then -- an OS update before that point restores the old kernel"
 }
 
 do_uninstall() {
@@ -597,7 +1018,9 @@ do_uninstall() {
     # is pointless there -- and leaving it behind would silently deny Wi-Fi to
     # any future kernel that ships working MT7902 firmware.
     systemctl disable --now "$VT_UNIT" >/dev/null 2>&1 || true
-    rm -f "$SERVICE_DEST" "$KEEP_DEST" "$PRESET_DEST" "$MODPROBE_DEST" "$VT_DEST"
+    systemctl disable --now "$CONFIRM_TIMER" >/dev/null 2>&1 || true
+    rm -f "$SERVICE_DEST" "$KEEP_DEST" "$PRESET_DEST" "$MODPROBE_DEST" "$VT_DEST" \
+          "$CONFIRM_DEST" "$CONFIRM_TIMER_DEST"
     systemctl daemon-reload
 
     kver="$(cached_kver)" || true
@@ -611,9 +1034,10 @@ case "${1:---install}" in
     --install|"") do_install ;;
     --boot)       do_boot ;;
     --cache)      build_cache ;;
+    --confirm)    do_confirm ;;
     --install-build) shift; do_install_build "${1:-}" ;;
     --status)     do_status ;;
     --uninstall)  do_uninstall ;;
-    -h|--help)    sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;
+    -h|--help)    sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \?//' ;;
     *)            die "unknown option: $1 (try --help)" ;;
 esac
