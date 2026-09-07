@@ -4,7 +4,40 @@ Symptom: the mouse, keyboard and headset all drop out together and take a long t
 
 Fix: a udev rule that stops the xHCI controller from wedging, plus a watchdog that rebuilds it if it does. `usb-reset` is the manual front end.
 
-## The topology is the amplifier
+## Current topology (2026-09-07)
+
+Reworked after the outage below: hub replaced, cascade flattened from four levels to two, card readers and USB NIC removed, headset dongle given a controller to itself.
+
+```
+Bus 1  (0f:00.0)   Steam Puck 12M · GIGABYTE ITE 12M · MT7902 BT 480M
+Bus 5  (12:00.4)
+  ├─ 5-1   Genesys 05e3:0610 hub    480M  self-powered, single-TT
+  │   └─ 5-1.3  Logitech Unifying         12M
+  └─ 5-2   VIA VL812 2109:2812 hub  480M  self-powered, single-TT (Das Keyboard's built-in hub)
+      ├─ 5-2.1  Razer Viper V3            12M
+      └─ 5-2.4  Das Keyboard              12M
+Bus 7  (13:00.0)   <- USB 2.0-only controller, one port, nothing else on it
+  └─ 7-1   Turtle Beach Stealth 600P      12M   audio card S3
+```
+
+**The headset dongle is alone on `13:00.0`.** A wedged dongle can now only take down itself — it cannot reach the mouse or the keyboards, which is the failure that started all this. That controller is the board's USB 2.0-only part (the kernel logs `USB0 root hub has no ports` for its SuperSpeed side), so 480M is its ceiling. Irrelevant for a full-speed audio dongle.
+
+First boot on this layout logged **zero USB errors** — no `-71`, no `-110`, no resets, no power cycles.
+
+Every 12M link here is a clean first-try negotiation rather than a failed-enumeration retry, the dongle included:
+
+```
+usb 7-1: new full-speed USB device number 2 using xhci_hcd
+usb 7-1: not running at top speed; connect to a high speed hub
+```
+
+Device number 2, first attempt, no preceding high-speed try. `not running at top speed` names the outcome, not a fault — [hardware/audio/](../audio/README.md) covers why that message misleads. The Steam Puck's 12M is likewise the device, not the port: it is a full-speed HID/CDC composite sitting in a genuine USB 3.x port.
+
+## The topology that caused the outage (2026-09-05)
+
+Historical — kept because it explains why the subsystem below exists.
+
+### How it was wired then
 
 Every 2.4 GHz receiver has to sit near the couch to get reception, so they all hang off one hub on a long cable. That hub is plugged into a rear USB 3.2 port, but only the USB 2.0 half of that connector is in use — `usb5-port2` is `configured` while its SuperSpeed peer `usb6-port2` reads `not attached`, and no device has ever enumerated at SuperSpeed on this machine. So everything shares one 480 Mbit/s link:
 
@@ -139,13 +172,33 @@ Two rules follow, and they apply to every unit in this repo:
 - **`xhci_hcd.quirks=0x80`** (`XHCI_RESET_ON_RESUME`). Since ~5.7 that quirk also blocks runtime suspend entirely, so it "fixes" this by the same mechanism as the udev rule — but it is `0444`, so cmdline-only, and it adds a full host-controller reset on every system resume. Redundant and more invasive.
 - **`usbcore.autosuspend=-1`.** Governs USB devices, not the PCI host function. Wrong layer for this failure.
 
-## Still outstanding — physical, not software
+## The "USB 3.0" extension cable is a USB 2.0 cable
 
-None of the above makes the link to the couch any better. In rough order of value:
+Isolated on 2026-09-07. Worth its own section because the intermediate results were all misleading and each one produced a confident wrong answer.
 
-1. **Get the card readers and the USB NIC off the couch link.** Two empty card reader slots started the outage that prompted all this, and there is already an onboard NIC (`enp9s0`) carrying the default route. Neither needs to be near the couch.
-2. **Move the headset dongle up to a port on `5-2` directly.** It is currently three hubs deep, sharing a single TT with the Das Keyboard. `5-2` is the multi-TT self-powered VL817 and `5-2-port2` is free. Same hub, same reception, own TT, two fewer hops.
-3. **Fix the cable.** The EPROTO storms and the untrained SuperSpeed link are the same fact. USB 2.0 high-speed is speced to 5 m of good cable and long USB-A extensions are usually 2.0-only and out of spec.
+Nothing on this machine had ever enumerated at SuperSpeed — across every boot in the journal, through several different hubs, cables and ports. That looks systemic, and a BIOS setting is the obvious suspect. It was not.
+
+Same drive, same physical connector, two results:
+
+| Setup | Result |
+|---|---|
+| Drive **direct** into the rear port | `6-2` — **5000M, SuperSpeed** |
+| Drive through the **"USB 3.0" extension cable** into that same port | `5-2` — **480M** |
+
+The board is fine; the cable does not carry the SuperSpeed pairs. A USB 2.0 cable with a blue connector — common enough to check before suspecting anything else.
+
+Two traps met on the way, both of which will mislead the next person:
+
+- **`bcdUSB 2.10` on a USB 3 device means nothing.** A SuperSpeed-capable device reports 2.10 whenever it enumerates on the USB 2.0 bus. Read `wSpeedsSupported` from the BOS descriptor instead — `lsusb -v -d VID:PID | rg 'wSpeedsSupported|SuperSpeed'`. The probe drive reported `bcdUSB 2.10` and `Device can operate at SuperSpeed (5Gbps)` simultaneously.
+- **The probe drive broke mid-test and kept answering.** It dropped into Phison boot-ROM mode (`13fe:1d00`, "2301 Boot Rom", 0 B) the moment it first negotiated SuperSpeed, and from then on came up at 480M in *every* port — which reads exactly like "no port does SuperSpeed" and nearly sent the diagnosis back to the motherboard. Unplugging it for 30 s restored it to `13fe:5000` "Patriot Memory", 58.9 GB. **Check the probe still identifies correctly between measurements**, or you are measuring the probe.
+
+None of this costs anything today: every device in use is a HID receiver or a full-speed audio dongle needing 12 Mbit/s against 480 available. It matters as a signal — a cable that cannot carry SuperSpeed is a marginal cable, and marginal cabling is what produced the `-71` storms in the first place.
+
+## Still outstanding
+
+1. **The USB-C → USB-A hub's lead is untested** and shows the same symptom: `5-1` enumerates as a USB 2.0 hub only (`05e3:0610`, the Genesys USB 2.0 half) and its SuperSpeed peer `usb6-port1` never attaches. A genuine 10 Gbps hub would present a second device on bus 6 alongside the 2.0 companion; there is none. Likely the same cause as the keyboard cable. Test it the same way — healthy USB 3 drive direct into the port, then through the lead.
+2. **Both hubs are single-TT** (`bDeviceProtocol=01`). This mattered when the headset shared a transaction translator with the Das Keyboard; it does not now the dongle has a controller to itself. Mouse and keyboard sharing the VL812's TT is fine — both are low-bandwidth HID.
+3. **Replace the keyboard extension cable** if a real USB 3 one is to hand. Nothing on it needs the bandwidth, so this is about signal integrity, not speed.
 
 ## Files
 
