@@ -28,8 +28,7 @@ Priorities below are (H)igh, (M)edium, (L)ow.
 
 ## Working (done)
 
-- Enabled TRIM (disacard) in fstab
-- Set noatime in fstab
+- Enabled TRIM, noatime
 - **Onboard Bluetooth (MediaTek MT7902)** - working via an out-of-tree `btusb_mt7902` driver. `hci0`, BlueZ default controller, survives reboots and SteamOS A/B updates. See [hardware/bluetooth/](hardware/bluetooth/README.md). The USB dongle is no longer needed but is worth leaving in as a fallback.
 - **Hardware sensors** - full coverage for thermal logging: fan RPM / Vcore / VRM temp from the ITE IT8696E (out-of-tree `it87`), SATA SSD temps (`drivetemp`), and the FCH SMBus unblocked so DDR5 DIMM temps work. All labels verified by correlation under load, not guessed. See [hardware/sensors/](hardware/sensors/README.md). DIMM temps confirmed reading after the reboot.
 - **Secondary game library (BTRFS RAID1)** - the two Crucial MX500s mirrored and mounted at `/home/deck/SATA` via fstab, with `compress=zstd:1`, `discard=async`, `noatime`, monthly scrub and weekly trim. SteamOS's own automount refuses anything that isn't ext4, so this goes around it. See [hardware/storage/](hardware/storage/README.md). **One manual step left:** register it as a Steam library with Steam closed.
