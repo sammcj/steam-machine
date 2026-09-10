@@ -17,10 +17,6 @@
 Things I haven't got around to investigating or doing yet
 Priorities below are (H)igh, (M)edium, (L)ow.
 
-- **Turn SMT back on in the BIOS (M)** - the 9800X3D is 8C/16T and is currently running 8C/**8T**. `Thread(s) per core: 1`, `/sys/devices/system/cpu/smt/control` = `notsupported`, `thread_siblings_list` = `0`, and there is no `nosmt` on the kernel command line, so it is off at firmware level rather than anything software-side. Gigabyte's default is Auto (enabled), so this was either changed deliberately or reset. **Advanced → AMD CBS → SMT Control → Auto**. Costs roughly 25-40% on compile-bound work; near-neutral for gaming. See [Platform notes](#smt-is-off-in-the-bios).
-- Configuration backup (M)
-- Emulation setup (setup retrodeck, restore rooms and metadata from SteamDeck) (L)
-- Overclocking GPU (L) - the _controls_ are now available and persistent (LACT overdrive, see [hardware/gpu/](hardware/gpu/README.md)); no clocks, limits or fan curves have actually been set yet.
 - DualSense adaptive triggers (not sure if they work / how to configure them) (M)
   - https://github.com/egormanga/SAxense
   - https://hardwaretester.com/gamepad
